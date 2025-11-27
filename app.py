@@ -1,11 +1,13 @@
 # app.py — Mechapres Industrial Heat Pump Calculator
-# Simple HP model + Low/High case economic calculations (Excel-style), all in £
+# Professional multi-page flow for customer estimates
+# DEBUGGED VERSION v2.0
 
 import math
 from io import BytesIO
 from datetime import datetime
 
 import streamlit as st
+import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
@@ -13,61 +15,351 @@ mpl.rcParams["figure.facecolor"] = "none"
 mpl.rcParams["axes.facecolor"] = "none"
 
 MECHAPRES_COLORS = {
-    "primary": "#003366",
-    "accent":  "#1a9850",
-    "text":    "#111111",
-    "muted":   "#6b7280"
+    "primary": "#0066cc",      # Vibrant blue
+    "secondary": "#004d99",    # Deep blue
+    "accent": "#3399ff",       # Sky blue
+    "light_blue": "#e6f2ff",   # Light blue
+    "text": "#1a1a1a",         # Dark text
+    "text_light": "#4d4d4d",   # Grey text
+    "white": "#ffffff",        # White
+    "border": "#cce5ff",       # Light blue border
+    "success": "#00aa66",      # Green
+    "warning": "#ff9933",      # Orange
+    "error": "#cc3333"         # Red
 }
-LOGO_PATH = "mechapres_logo.png"  # optional logo file next to app.py
+LOGO_PATH = "mechapres_logo.png"
 
-# Fuel emission factors (kg CO2 per kWh, Net CV) from your tables
+# Fuel emission factors (kg CO2 per kWh, Net CV)
 FUEL_EMISSION_FACTORS_KG_PER_KWH = {
-    "Butane":            0.24107,
-    "LNG":               0.20489,
-    "LPG":               0.23032,
-    "Natural gas":       0.20270,
-    "Propane":           0.23258,
-    "Fuel oil":          0.28523,
+    "Butane": 0.24107,
+    "LNG": 0.20489,
+    "LPG": 0.23032,
+    "Natural gas": 0.20270,
+    "Propane": 0.23258,
+    "Fuel oil": 0.28523,
     "Coal (industrial)": 0.33944,
 }
 FUEL_OPTIONS = list(FUEL_EMISSION_FACTORS_KG_PER_KWH.keys())
 
-# Electricity CO2 factor (kg CO2 per MWh) – used in background
+# Electricity CO2 factor (kg CO2 per MWh)
 ELECTRICITY_CO2_KG_PER_MWH = 50.0
 
-# ----------------- Brand / Theme -----------------
+# Page navigation - Investment Variables hidden from customers
+PAGES = [
+    "Welcome",
+    "Basic Site Parameters",
+    "Waste Heat",
+    "Waste Heat Medium",
+    "Demand & Energy Prices",
+    "Annual Energy Costs",
+    "Investment & Returns",
+    "Results"
+]
+
+# ==================== SESSION STATE INITIALIZATION ====================
+
+def init_session_state():
+    """Initialize all session state variables with defaults"""
+    
+    # Navigation
+    if "current_page" not in st.session_state:
+        st.session_state.current_page = 0
+    if "show_contact" not in st.session_state:
+        st.session_state.show_contact = False
+    
+    # Basic Site Parameters
+    defaults = {
+        "process_temp": 150.0,
+        "energy_vector": "Steam",
+        "heat_supply_tech": "Fossil fuel boiler",
+        "T_out2": 150.0,
+        "steam_p": 5.0,
+        "prod_days": 250,
+        "prod_hours_per_day": 12,
+    }
+    
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+    
+    # Waste Heat
+    waste_defaults = {
+        "has_waste": "Yes",
+        "how_released": "Dedicated cooling system or exhaust pipe",
+        "w_temp_known": "Yes",
+        "w_temp": 100.0,
+        "w_amt_known": "No",
+        "q_waste_kw": 1000.0,
+        "w_amt_band": "31–50% of energy input",
+        "waste_heat_captured": "No",
+        "has_waste_heat_processor": "No",
+    }
+    
+    for key, value in waste_defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+    
+    # Waste Heat Medium
+    if "waste_form" not in st.session_state:
+        st.session_state.waste_form = "Hot water"
+    if "humidity_ratio_known" not in st.session_state:
+        st.session_state.humidity_ratio_known = "No"
+    
+    # Demand & Energy Prices
+    if "operating_hours" not in st.session_state:
+        calculated = float(st.session_state.prod_days) * float(st.session_state.prod_hours_per_day)
+        st.session_state.operating_hours = min(max(calculated, 100.0), 8760.0)
+    
+    energy_defaults = {
+        "yearly_cost": 500000.0,
+        "fuel_type": "Natural gas",
+        "fuel_price": 30.0,
+        "electricity_price": 90.0,
+        "boiler_eff_pct": 80.0,
+    }
+    
+    for key, value in energy_defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+    
+    # Annual Energy Costs
+    if "annual_band" not in st.session_state:
+        st.session_state.annual_band = "£100k–£500k"
+    
+    # Investment Variables
+    investment_defaults = {
+        "design_pm": 50000.0,
+        "fixed_install": 50000.0,
+        "hp_cost_per_kw": 250.0,
+        "hr_cost_per_kw": 50.0,
+        "var_install_per_kw": 10.0,
+    }
+    
+    for key, value in investment_defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+# Call initialization
+init_session_state()
+
+# ==================== HELPER FUNCTIONS ====================
+
+def system_uses_fuel(heat_supply_tech):
+    """Determine if the heat supply system uses fuel or electricity"""
+    electric_systems = ["Electric boiler", "Industrial heat pump"]
+    return heat_supply_tech not in electric_systems
+
+def get_efficiency_default(heat_supply_tech):
+    """Get default efficiency based on heat supply technology"""
+    efficiency_map = {
+        "Electric boiler": 95.0,
+        "Industrial heat pump": 90.0,
+        "Combined heat and power": 90.0,
+        "Fossil fuel boiler": 80.0,
+        "Other": 80.0
+    }
+    return efficiency_map.get(heat_supply_tech, 80.0)
+
+def calculate_operating_hours():
+    """Calculate operating hours from production days and hours per day"""
+    days = float(st.session_state.get("prod_days", 250))
+    hours_per_day = float(st.session_state.get("prod_hours_per_day", 12))
+    return min(max(days * hours_per_day, 100.0), 8760.0)
+
+# ==================== UI COMPONENTS ====================
+
 def apply_brand_theme():
+    """Apply simple blue professional theme"""
     css = """
     <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+      
+      /* Blue color theme */
       :root {
-        --mp-top:    #f8e6f1;
-        --mp-mid:    #6e49b9;
-        --mp-bottom: #ffe3c2;
-        --mp-text:   #111111;
-        --mp-card:   rgba(255,255,255,0.74);
-        --mp-border: rgba(0,0,0,0.08);
+        --primary-blue: #0066cc;
+        --deep-blue: #004d99;
+        --sky-blue: #3399ff;
+        --light-blue: #e6f2ff;
+        --border-blue: #cce5ff;
+        --text-dark: #1a1a1a;
+        --text-grey: #4d4d4d;
+        --white: #ffffff;
       }
+
+      /* Base styles */
       html, body, .stApp {
-        min-height: 100vh;
-        background: linear-gradient(180deg, var(--mp-top) 0%, var(--mp-mid) 45%, var(--mp-bottom) 100%) fixed;
+        font-family: 'Inter', sans-serif;
+        color: var(--text-dark);
+        background: linear-gradient(135deg, #ffffff 0%, #f0f7ff 100%);
       }
-      .main .block-container { padding-top: 1.0rem; padding-bottom: 2.5rem; background: transparent; }
-      h1, h2, h3 { color: #ffffff !important; text-shadow: 0 1px 2px rgba(0,0,0,0.25); }
-      .stButton>button, .stDownloadButton>button {
-        background: #003366; color:#fff;border:none;border-radius:12px;padding:.5rem .9rem; box-shadow:0 4px 12px rgba(0,0,0,0.12);
+
+      /* Container */
+      .main .block-container {
+        max-width: 1200px;
+        padding: 2.5rem 1.5rem;
       }
-      .stButton>button:hover, .stDownloadButton>button:hover { filter: brightness(1.06); }
-      section[data-testid="stSidebar"] { background: rgba(255,255,255,.55); backdrop-filter: blur(6px); border-right:1px solid var(--mp-border); }
-      .stExpander, .stForm { background: var(--mp-card)!important; border:1px solid var(--mp-border); border-radius:14px; padding:.6rem .8rem; }
-      .brandbar { background: transparent !important; border-bottom: 1px solid rgba(255,255,255,.25) !important; }
-      .brandbar .tagline { color:#fff !important; text-shadow:0 1px 2px rgba(0,0,0,0.25); font-weight:600; }
-      .stTextInput input:focus, .stNumberInput input:focus { outline:2px solid #1a9850; }
-      a, a:visited { color:#003366; }
+
+      /* Headers with blue color */
+      h1 {
+        color: var(--primary-blue) !important;
+        font-size: 2.5rem !important;
+        font-weight: 800 !important;
+        margin-bottom: 1.5rem !important;
+      }
+
+      h2 {
+        color: var(--primary-blue) !important;
+        font-size: 2rem !important;
+        font-weight: 700 !important;
+        margin: 2rem 0 1.5rem 0 !important;
+      }
+
+      h3 {
+        color: var(--primary-blue) !important;
+        font-size: 1.5rem !important;
+        font-weight: 700 !important;
+        margin-bottom: 1rem !important;
+      }
+
+      /* Form labels */
+      label {
+        color: var(--primary-blue) !important;
+        font-weight: 600 !important;
+        font-size: 0.95rem !important;
+      }
+
+      /* Input fields */
+      .stSelectbox select, 
+      .stNumberInput input, 
+      .stTextInput input {
+        border: 2px solid var(--border-blue) !important;
+        border-radius: 10px !important;
+        padding: 14px 18px !important;
+        transition: all 0.2s ease !important;
+      }
+
+      .stSelectbox select:focus, 
+      .stNumberInput input:focus, 
+      .stTextInput input:focus {
+        border-color: var(--primary-blue) !important;
+        box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1) !important;
+      }
+
+      /* Radio buttons */
+      .stRadio > div {
+        background: white;
+        border: 2px solid var(--border-blue);
+        border-radius: 12px;
+        padding: 1rem;
+        margin: 0.5rem 0;
+        transition: all 0.2s ease;
+      }
+
+      .stRadio > div:hover {
+        border-color: var(--primary-blue);
+        background: var(--light-blue);
+      }
+
+      /* Buttons */
+      .stButton > button {
+        background: linear-gradient(135deg, var(--primary-blue) 0%, var(--sky-blue) 100%) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 10px !important;
+        padding: 14px 32px !important;
+        font-weight: 700 !important;
+        font-size: 1rem !important;
+        transition: all 0.2s ease !important;
+        min-height: 48px !important;
+      }
+
+      .stButton > button:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 8px 25px rgba(0, 102, 204, 0.3) !important;
+      }
+
+      /* Metrics */
+      .stMetric {
+        background: white;
+        border: 2px solid var(--border-blue);
+        border-radius: 12px;
+        padding: 1.5rem;
+        box-shadow: 0 2px 8px rgba(0, 102, 204, 0.08);
+      }
+
+      .stMetric:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(0, 102, 204, 0.12);
+      }
+
+      .stMetric label {
+        color: var(--text-grey) !important;
+        font-size: 0.9rem !important;
+      }
+
+      .stMetric [data-testid="stMetricValue"] {
+        color: var(--primary-blue) !important;
+        font-size: 2rem !important;
+        font-weight: 700 !important;
+      }
+
+      /* Alerts */
+      .stSuccess {
+        background: rgba(0, 170, 102, 0.1) !important;
+        border-left: 4px solid #00aa66 !important;
+        border-radius: 8px !important;
+        padding: 1rem !important;
+      }
+
+      .stError {
+        background: rgba(204, 51, 51, 0.1) !important;
+        border-left: 4px solid #cc3333 !important;
+        border-radius: 8px !important;
+        padding: 1rem !important;
+      }
+
+      .stInfo {
+        background: var(--light-blue) !important;
+        border-left: 4px solid var(--primary-blue) !important;
+        border-radius: 8px !important;
+        padding: 1rem !important;
+      }
+
+      /* Dividers */
+      hr {
+        margin: 2rem 0 !important;
+        border: none !important;
+        border-top: 2px solid var(--border-blue) !important;
+      }
+
+      /* Links */
+      a {
+        color: var(--primary-blue) !important;
+        text-decoration: none !important;
+        font-weight: 600 !important;
+      }
+
+      a:hover {
+        color: var(--deep-blue) !important;
+        text-decoration: underline !important;
+      }
+
+      /* Responsive */
+      @media (max-width: 768px) {
+        .main .block-container {
+          padding: 1.5rem 1rem;
+        }
+        h1 { font-size: 2rem !important; }
+        h2 { font-size: 1.75rem !important; }
+        h3 { font-size: 1.25rem !important; }
+      }
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
 
-def show_brand_bar(logo_path=LOGO_PATH, brand=MECHAPRES_COLORS):
+
+def show_brand_bar(logo_path=LOGO_PATH):
+    """Display the brand header bar"""
     st.markdown("<style>.brandbar{ position:sticky; top:0; z-index:999; padding:10px 16px; }</style>", unsafe_allow_html=True)
     with st.container():
         st.markdown("<div class='brandbar'></div>", unsafe_allow_html=True)
@@ -83,40 +375,71 @@ def show_brand_bar(logo_path=LOGO_PATH, brand=MECHAPRES_COLORS):
             if st.button("Contact Sales", key="cta_top", use_container_width=True):
                 st.session_state.show_contact = True
 
-if "show_contact" not in st.session_state:
-    st.session_state.show_contact = False
-if "welcome_hint" not in st.session_state:
-    st.session_state.welcome_hint = ""
+def show_progress_bar():
+    """Display progress indicator"""
+    progress = (st.session_state.current_page / (len(PAGES) - 1)) * 100
+    st.markdown(f"""
+    <div style="--progress: {progress}%" class="page-progress"></div>
+    <div class="step-indicator">
+        <div style="font-size: 14px; color: #10b981; font-weight: 600; margin-bottom: 0.5rem;">
+            STEP {st.session_state.current_page + 1} OF {len(PAGES)}
+        </div>
+        <div style="font-size: 18px; font-weight: 600; color: #1e40af;">
+            {PAGES[st.session_state.current_page]}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-# ----------------- Decision tree thresholds -----------------
+def navigation_buttons():
+    """Display navigation buttons"""
+    st.markdown("<div style='margin: 3rem 0 2rem 0;'>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col1:
+        if st.session_state.current_page > 0:
+            if st.button("← Previous", use_container_width=True, key="nav_prev"):
+                st.session_state.current_page -= 1
+                st.rerun()
+    
+    with col3:
+        if st.session_state.current_page < len(PAGES) - 1:
+            if st.button("Next →", use_container_width=True, key="nav_next", type="primary"):
+                st.session_state.current_page += 1
+                st.rerun()
+    
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ==================== DECISION TREE & CALCULATIONS ====================
+
 DT_THRESHOLDS = {
-    "process_temp_min": 80.0,  "process_temp_max": 200.0,
-    "hp_target_max":    180.0, "steam_pressure_max": 10.0,
-    "hot_air_ok_max":   110.0, "hot_air_caution_max": 150.0,
+    "process_temp_min": 80.0,
+    "process_temp_max": 200.0,
+    "hp_target_max": 180.0,
+    "steam_pressure_max": 10.0,
+    "hot_air_ok_max": 110.0,
+    "hot_air_caution_max": 150.0,
 }
 
 def evaluate_decision_tree(
-    process_temp_c,
-    energy_vector,
-    target_supply_temp_c,
-    steam_pressure_barA,
-    has_waste_heat,
-    waste_temp_known,
-    waste_temp_c,
-    waste_amount_known,
-    waste_amount_pct_band,
-    waste_heat_captured=None,
-    has_waste_heat_processor=None,
-    how_released=None,
-    waste_form=None,
-    humidity_ratio_known=None,
-    q_waste_kw=None
+    process_temp_c, energy_vector, target_supply_temp_c, steam_pressure_barA,
+    has_waste_heat, waste_temp_known, waste_temp_c, waste_amount_known,
+    waste_amount_pct_band, waste_heat_captured=None, has_waste_heat_processor=None,
+    how_released=None, waste_form=None, humidity_ratio_known=None, q_waste_kw=None
 ):
+    """Evaluate heat pump feasibility based on decision tree logic"""
     TH = DT_THRESHOLDS
     notes = []
     assumptions = {}
 
-    # 1) Process temperature window
+    # Validate inputs
+    if process_temp_c is None or target_supply_temp_c is None:
+        return {
+            "status": "caution",
+            "notes": ["Please provide all required temperature values."],
+            "assumptions": {}
+        }
+
+    # Check process temperature range
     if process_temp_c < TH["process_temp_min"] or process_temp_c > TH["process_temp_max"]:
         return {
             "status": "not_viable",
@@ -124,137 +447,103 @@ def evaluate_decision_tree(
             "assumptions": {}
         }
 
-    # 2) Energy vector & target temperature/pressure
+    # Check energy vector specific constraints
     e = str(energy_vector).lower()
-
     if e == "steam":
         if steam_pressure_barA is None:
-            return {
-                "status": "caution",
-                "notes": ["Provide steam pressure (barA) to check heat-pump feasibility."],
-                "assumptions": {}
-            }
+            return {"status": "caution", "notes": ["Provide steam pressure (barA) to check heat-pump feasibility."], "assumptions": {}}
         if steam_pressure_barA > TH["steam_pressure_max"]:
-            return {
-                "status": "not_viable",
-                "notes": [f"Steam pressure {steam_pressure_barA:.1f} barA > {TH['steam_pressure_max']} barA — heat pump not possible."],
-                "assumptions": {}
-            }
-
+            return {"status": "not_viable", "notes": [f"Steam pressure {steam_pressure_barA:.1f} barA > {TH['steam_pressure_max']} barA — heat pump not possible."], "assumptions": {}}
     elif e == "hot air":
         if target_supply_temp_c > TH["hp_target_max"]:
-            return {
-                "status": "not_viable",
-                "notes": [f"Required hot-air temperature {target_supply_temp_c:.0f}°C > {TH['hp_target_max']}°C — heat pump not possible."],
-                "assumptions": {}
-            }
+            return {"status": "not_viable", "notes": [f"Required hot-air temperature {target_supply_temp_c:.0f}°C > {TH['hp_target_max']}°C — heat pump not possible."], "assumptions": {}}
         if target_supply_temp_c > TH["hot_air_caution_max"]:
-            return {
-                "status": "not_viable",
-                "notes": ["Hot air >150 °C — heat pump not recommended (consider heat exchangers)."],
-                "assumptions": {}
-            }
+            return {"status": "not_viable", "notes": ["Hot air >150 °C — heat pump not recommended (consider heat exchangers)."], "assumptions": {}}
         if TH["hot_air_ok_max"] < target_supply_temp_c <= TH["hot_air_caution_max"]:
             notes.append("Hot air 110–150 °C — feasible but COP may be modest (high lift).")
-
     elif e == "hot water":
         if target_supply_temp_c > TH["hp_target_max"]:
-            return {
-                "status": "not_viable",
-                "notes": [f"Required hot-water temperature {target_supply_temp_c:.0f}°C > {TH['hp_target_max']}°C — heat pump not possible."],
-                "assumptions": {}
-            }
+            return {"status": "not_viable", "notes": [f"Required hot-water temperature {target_supply_temp_c:.0f}°C > {TH['hp_target_max']}°C — heat pump not possible."], "assumptions": {}}
 
-    else:
-        notes.append("Unknown energy vector — assuming heat pump can meet the target with reduced COP.")
-
-    # 3) Waste heat yes/no
+    # Check waste heat availability
     if not has_waste_heat:
-        return {
-            "status": "suggest_hx",
-            "notes": ["No waste heat identified — this may be better suited to direct heat recovery via heat exchangers."],
-            "assumptions": {}
-        }
+        return {"status": "suggest_hx", "notes": ["No waste heat identified — this may be better suited to direct heat recovery via heat exchangers."], "assumptions": {}}
 
-    # 4) How is waste heat released?
+    # Check how waste heat is released
     if how_released == "General ventilation in the production area":
-        return {
-            "status": "not_viable",
-            "notes": [
-                "Waste heat only available via general room ventilation — better suited to heat recovery through heat exchangers than a heat pump."
-            ],
-            "assumptions": {}
-        }
+        return {"status": "not_viable", "notes": ["Waste heat only available via general room ventilation — better suited to heat recovery through heat exchangers than a heat pump."], "assumptions": {}}
     elif how_released == "Dedicated cooling system or exhaust pipe":
         notes.append("Waste heat from a dedicated cooling system or exhaust — suitable for heat-pump integration.")
-    elif how_released:
-        notes.append(f"Waste heat release path: {how_released} (assumed suitable for a heat pump).")
 
-    # 5) Waste-heat temperature
+    # Determine waste heat temperature
     if waste_temp_known and (waste_temp_c is not None):
         assumptions["T_in1"] = float(waste_temp_c)
     else:
         assumptions["T_in1"] = float(process_temp_c)
         notes.append("Waste-heat temperature unknown — assuming equal to process temperature.")
 
-    # 6) How much waste heat?
+    # Determine waste heat amount
     if waste_amount_known and q_waste_kw is not None and q_waste_kw > 0:
         assumptions["Q_waste_kW"] = float(q_waste_kw)
         notes.append(f"Using user-provided waste heat level Q_waste ≈ {q_waste_kw:.0f} kW.")
     else:
         band = waste_amount_pct_band or "31–50% of energy input"
-        band_clean = band.split("of")[0].strip()
-        hi_str = band_clean.split("–")[1]
-        hi = int("".join(ch for ch in hi_str if ch.isdigit()))
+        try:
+            band_clean = band.split("of")[0].strip()
+            if "–" in band_clean:
+                hi_str = band_clean.split("–")[1]
+            else:
+                hi_str = "50"
+            hi = int("".join(ch for ch in hi_str if ch.isdigit()) or "50")
+        except:
+            hi = 50
         assumptions["waste_pct"] = hi
         notes.append(f"Waste-heat amount unknown — using upper estimate ≈ {hi}% of energy input.")
 
-    # 7) Waste-heat medium form
+    # Waste form specific notes
     if waste_form:
         assumptions["waste_form"] = waste_form
-        if waste_form == "Humid air":
-            if humidity_ratio_known == "Yes":
-                notes.append("Waste heat available as humid air with known humidity ratio — heat pump integration possible, "
-                             "with final sizing refined at design stage.")
-            else:
-                notes.append("Waste heat available as humid air but humidity ratio unknown — using typical values, "
-                             "to be refined during a detailed study.")
-        elif waste_form == "Dry hot air":
-            notes.append("Waste heat available as dry hot air — suitable for heat pump via an air-to-refrigerant heat exchanger.")
-        elif waste_form == "Hot water":
-            notes.append("Waste heat available as hot water — highly suitable for heat-pump integration.")
-        elif waste_form == "Pure steam":
-            notes.append("Waste heat available as pure steam — heat pump integration possible with suitable condenser design.")
+        form_notes = {
+            "Humid air": "Waste heat available as humid air — heat pump integration possible, with final sizing refined at design stage.",
+            "Dry hot air": "Waste heat available as dry hot air — suitable for heat pump via an air-to-refrigerant heat exchanger.",
+            "Hot water": "Waste heat available as hot water — highly suitable for heat-pump integration.",
+            "Pure steam": "Waste heat available as pure steam — heat pump integration possible with suitable condenser design."
+        }
+        if waste_form in form_notes:
+            notes.append(form_notes[waste_form])
 
-    # 8) Existing capture & processor flags
+    # Waste heat capture status
     if waste_heat_captured == "Yes":
         notes.append("Waste heat is already captured — integration may be simpler and cheaper.")
     elif waste_heat_captured == "No":
         notes.append("Waste heat not yet captured — additional pipework/ducting or a heat exchanger may be needed.")
 
+    # Existing waste heat processor
     if has_waste_heat_processor == "Yes":
         notes.append("There is already a waste-heat processing system on site (e.g. ORC or heat-recovery unit).")
     elif has_waste_heat_processor == "No":
         notes.append("No existing waste-heat processor — Mechapres could be the main technology to use that heat.")
 
-    return {
-        "status": "proceed" if not notes else "caution",
-        "notes": notes,
-        "assumptions": assumptions
-    }
+    return {"status": "proceed" if not notes else "caution", "notes": notes, "assumptions": assumptions}
 
-# ----------------- Simple HP model (technical, background) -----------------
-def excel_performance_logic(
-    T_in1, T_out2, P_out2, Q_process,
-    T_app_condenser=8.0, T_app_evaporator=8.0,
-    T_ev_minimum=70.0, lorentz_eff=0.60,
-    waste_heat_min_pct=30.0, waste_heat_max_pct=60.0
-):
-    # These formulas follow the structure of the Simple HP model sheet.
+def excel_performance_logic(T_in1, T_out2, P_out2, Q_process, 
+                            T_app_condenser=8.0, T_app_evaporator=8.0, 
+                            T_ev_minimum=70.0, lorentz_eff=0.60, 
+                            waste_heat_min_pct=30.0, waste_heat_max_pct=60.0):
+    """Calculate heat pump performance metrics"""
+    
+    # Validation
+    if Q_process <= 0:
+        raise ValueError("Q_process must be greater than 0")
+    if T_in1 is None or T_out2 is None:
+        raise ValueError("Temperature values cannot be None")
+    
+    # Calculate temperatures
     T_cond_steam = T_out2 + T_app_condenser - 2.0
-    T_evap_raw   = T_in1 - T_app_evaporator
-    T_evap       = max(T_evap_raw, T_ev_minimum)
+    T_evap_raw = T_in1 - T_app_evaporator
+    T_evap = max(T_evap_raw, T_ev_minimum)
 
+    # Calculate COP
     if T_cond_steam <= T_evap:
         COP_carnot = 0.0
     else:
@@ -262,67 +551,71 @@ def excel_performance_logic(
         COP_carnot = TcK / (TcK - TeK)
 
     COP_real = max(0.0, lorentz_eff * COP_carnot)
-
-    wh_min = Q_process * (waste_heat_min_pct/100.0)
-    wh_max = Q_process * (waste_heat_max_pct/100.0)
-
+    
+    # Calculate waste heat requirements
+    wh_min = Q_process * (waste_heat_min_pct / 100.0)
+    wh_max = Q_process * (waste_heat_max_pct / 100.0)
+    
+    # Calculate electrical consumption
     E_full = (Q_process / COP_real) if COP_real > 0 else float("inf")
-    E_min  = E_full/2.0 if math.isfinite(E_full) else float("inf")
-
-    Q2_min = wh_min  # indicative: useful high-grade heat from waste (low case)
-    Q2_max = wh_max  # high case
-
+    E_min = E_full / 2.0 if math.isfinite(E_full) else float("inf")
+    
+    Q2_min = wh_min
+    Q2_max = wh_max
     capacity_MWth = Q_process / 1000.0
+
     return {
-        "T_cond_steam":   T_cond_steam,
-        "T_evap":         T_evap,
-        "COP_carnot":     COP_carnot,
-        "COP_real":       COP_real,
+        "T_cond_steam": T_cond_steam,
+        "T_evap": T_evap,
+        "COP_carnot": COP_carnot,
+        "COP_real": COP_real,
         "waste_heat_min_kW": wh_min,
         "waste_heat_max_kW": wh_max,
-        "E_min_kW":       E_min,
-        "E_max_kW":       E_full,
-        "Q2_min_kW":      Q2_min,
-        "Q2_max_kW":      Q2_max,
-        "capacity_MWth":  capacity_MWth
+        "E_min_kW": E_min,
+        "E_max_kW": E_full,
+        "Q2_min_kW": Q2_min,
+        "Q2_max_kW": Q2_max,
+        "capacity_MWth": capacity_MWth
     }
 
-# ----------------- PDF generation (uses high case metrics) -----------------
+# ==================== PDF GENERATION ====================
+
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 
 def generate_report(inputs, results, logo_path=LOGO_PATH, brand=MECHAPRES_COLORS):
+    """Generate PDF report"""
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
 
     # Header
     c.setFillColor(colors.HexColor("#ffffff"))
-    c.rect(0, height-100, width, 100, stroke=0, fill=1)
+    c.rect(0, height - 100, width, 100, stroke=0, fill=1)
     if logo_path:
         try:
-            c.drawImage(logo_path, 40, height-85, width=100, preserveAspectRatio=True, mask='auto')
+            c.drawImage(logo_path, 40, height - 85, width=100, preserveAspectRatio=True, mask='auto')
         except Exception:
             pass
     c.setFillColor(colors.HexColor(brand["primary"]))
     c.setFont("Helvetica-Bold", 15)
-    c.drawString(160, height-60, "Industrial Heat Pump Estimation Report")
+    c.drawString(160, height - 60, "Industrial Heat Pump Estimation Report")
     c.setFillColor(colors.black)
     c.setFont("Helvetica", 9)
-    c.drawString(160, height-78, f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    c.drawString(160, height - 78, f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     c.setStrokeColor(colors.HexColor(brand["primary"]))
-    c.line(40, height-100, width-40, height-100)
+    c.line(40, height - 100, width - 40, height - 100)
 
-    # Contact
-    y = height-125
+    # Contact details
+    y = height - 125
     c.setFont("Helvetica-Bold", 11)
     c.drawString(40, y, "Contact Details")
     y -= 16
     c.setFont("Helvetica", 9)
-    for label, key in [("Name","contact_name"),("Company","contact_company"),
-                       ("Email","contact_email"),("Phone","contact_phone")]:
+    for label, key in [("Name", "contact_name"), ("Company", "contact_company"), 
+                       ("Email", "contact_email"), ("Phone", "contact_phone")]:
         val = inputs.get(key)
         if val:
             c.drawString(60, y, f"{label}: {val}")
@@ -330,572 +623,840 @@ def generate_report(inputs, results, logo_path=LOGO_PATH, brand=MECHAPRES_COLORS
     consent_txt = "Yes" if inputs.get("contact_consent") else "No"
     c.drawString(60, y, f"Consent to contact: {consent_txt}")
     y -= 14
-    c.setStrokeColor(colors.HexColor(brand["muted"]))
-    c.line(40, y, width-40, y)
-    y -= 14
 
-    # Inputs
+    # Results summary
     c.setFont("Helvetica-Bold", 11)
     c.setFillColor(colors.HexColor(brand["primary"]))
-    c.drawString(40, y, "1) Input Summary")
-    c.setFillColor(colors.black)
-    y -= 16
-    c.setFont("Helvetica", 9)
-    for key, val in inputs.items():
-        if str(key).startswith("contact_"):
-            continue
-        c.drawString(60, y, f"{key.replace('_',' ').title()}: {val}")
-        y -= 12
-        if y < 150:
-            c.showPage()
-            y = height-60
-
-    # Results
-    c.setFont("Helvetica-Bold", 11)
-    c.setFillColor(colors.HexColor(brand["primary"]))
-    c.drawString(40, y, "2) Results Summary (High case)")
+    c.drawString(40, y, "Results Summary")
     c.setFillColor(colors.black)
     y -= 16
     c.setFont("Helvetica", 9)
     summary_lines = [
-        ("System Thermal Capacity (MWth)", f"{results.get('capacity_MWth',0):.2f}"),
-        ("Estimated COP",                  f"{results.get('cop',0):.2f}"),
-        ("Annual Useful Heat (MWh)",       f"{results.get('Q_steam_MWh',0):.0f}"),
-        ("Annual Cost Savings (high case, £)", f"{results.get('savings_high',0):,.0f}"),
-        ("CO₂ Reduction (t/year)",         f"{results.get('co2_savings',0):,.0f}"),
-        ("Simple Payback (high case, years)", f"{results.get('payback_high',0):.1f}"),
-        ("IRR high case (10 years)",       f"{results.get('irr_high',0):.0f}%"),
+        ("Annual Cost Savings (high case, £)", f"{results.get('savings_high', 0):,.0f}"),
+        ("CO₂ Reduction (t/year)", f"{results.get('co2_savings', 0):,.0f}"),
+        ("Simple Payback (high case, years)", f"{results.get('payback_high', 0):.1f}"),
     ]
     for k, v in summary_lines:
         c.drawString(60, y, f"{k}: {v}")
         y -= 12
 
-    # Charts (cost & CO2)
-    y -= 6
-    c.setFont("Helvetica-Bold", 11)
-    c.setFillColor(colors.HexColor(brand["primary"]))
-    c.drawString(40, y, "3) Cost & Emission Comparison")
-    c.setFillColor(colors.black)
-    y -= 120
-
-    systems = ['Current', 'Mechapres']
-    cost_vals = [results.get('cost_current',0), results.get('cost_mechapres',0)]
-    co2_vals  = [results.get('co2_current',0),  results.get('co2_mechapres',0)]
-
-    fig1, ax1 = plt.subplots(figsize=(3.6,2.2))
-    fig1.patch.set_alpha(0.0); ax1.set_facecolor('none')
-    ax1.bar(systems, cost_vals, color=["#9CA3AF", MECHAPRES_COLORS["accent"]])
-    ax1.set_title("Annual Energy Cost (£)"); ax1.set_ylabel("£/year")
-    fig1.tight_layout()
-    img1 = BytesIO()
-    fig1.savefig(img1, format="png", dpi=200, bbox_inches="tight")
-    plt.close(fig1); img1.seek(0)
-
-    fig2, ax2 = plt.subplots(figsize=(3.6,2.2))
-    fig2.patch.set_alpha(0.0); ax2.set_facecolor('none')
-    ax2.bar(systems, co2_vals, color=["#9CA3AF", MECHAPRES_COLORS["accent"]])
-    ax2.set_title("Annual CO₂ Emissions (t/yr)"); ax2.set_ylabel("tCO₂/yr")
-    fig2.tight_layout()
-    img2 = BytesIO()
-    fig2.savefig(img2, format="png", dpi=200, bbox_inches="tight")
-    plt.close(fig2); img2.seek(0)
-
-    c.drawImage(ImageReader(img1), 50,  y, width=220, height=110, mask='auto')
-    c.drawImage(ImageReader(img2), 310, y, width=220, height=110, mask='auto')
-
-    # Notes
-    y -= 120
-    c.setFont("Helvetica-Bold", 11)
-    c.setFillColor(colors.HexColor(brand["primary"]))
-    c.drawString(40, y, "4) Viability Notes")
-    c.setFillColor(colors.black)
-    y -= 14
-    c.setFont("Helvetica", 9)
-    for msg in results.get("messages", []):
-        c.drawString(60, y, f"- {msg}")
-        y -= 12
-        if y < 80:
-            c.showPage()
-            y = height-60
-
+    # Disclaimer
     c.setFont("Helvetica-Oblique", 8)
     c.setFillColor(colors.HexColor(MECHAPRES_COLORS["muted"]))
-    c.drawString(40, y, "Disclaimer: Indicative estimates only. For detailed feasibility, contact info@mechapres.co.uk.")
+    c.drawString(40, y - 20, "Disclaimer: Indicative estimates only. For detailed feasibility, contact info@mechapres.co.uk.")
     c.showPage()
     c.save()
     buffer.seek(0)
     return buffer
 
-# ----------------- Email utility -----------------
-import smtplib, ssl
+# ==================== EMAIL FUNCTIONALITY ====================
+
+import smtplib
+import ssl
 from email.message import EmailMessage
 from email.utils import formatdate
 
 def send_email_with_pdf(subject, body, to_addr, pdf_bytes, pdf_filename):
+    """Send email with PDF attachment"""
     try:
-        host = st.secrets["SMTP_HOST"]; port = int(st.secrets["SMTP_PORT"])
-        user = st.secrets["SMTP_USER"]; pwd  = st.secrets["SMTP_PASS"]
+        host = st.secrets["SMTP_HOST"]
+        port = int(st.secrets["SMTP_PORT"])
+        user = st.secrets["SMTP_USER"]
+        pwd = st.secrets["SMTP_PASS"]
     except Exception:
         raise RuntimeError("SMTP secrets missing. Add them in .streamlit/secrets.toml")
+    
     msg = EmailMessage()
     msg["From"] = user
-    msg["To"]   = to_addr
+    msg["To"] = to_addr
     msg["Date"] = formatdate(localtime=True)
     msg["Subject"] = subject
     msg.set_content(body)
     msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename=pdf_filename)
+    
     context = ssl.create_default_context()
     with smtplib.SMTP(host, port) as server:
         server.starttls(context=context)
         server.login(user, pwd)
         server.send_message(msg)
 
-# ----------------- Streamlit layout -----------------
+# ==================== MAIN APPLICATION ====================
+
 st.set_page_config(page_title="Mechapres Industrial Heat Pump Calculator", layout="wide")
 apply_brand_theme()
 show_brand_bar()
-tabs = st.tabs(["🏠 Welcome", "1️⃣ Project", "2️⃣ Economics", "✅ Results"])
 
-# ===== Tab 0: Welcome =====
-with tabs[0]:
-    st.title("Mechapres Industrial Heat Pump Estimator")
+if st.session_state.current_page > 0:
+    show_progress_bar()
 
-    st.markdown(
-        """
-        ### Welcome to Mechapres high-temperature heat pumps
+# ==================== PAGE ROUTING ====================
 
-        Mechapres combines **high-temperature heat pumps** with **thermal storage** to turn low-grade
-        heat (waste heat, solar, off-peak electricity) into the **steam and hot water your process needs**.
+current_page = PAGES[st.session_state.current_page]
 
-        With this quick calculator you can:
-        - Check whether a heat pump is suitable for your process.
-        - Estimate potential **energy cost savings** and **CO₂ cuts**.
-        - Explore a **conservative (low)** and **ambitious (high)** project size.
-
-        """
-    )
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown("#### 💸 Cut operating costs\nUse low-cost electricity and waste heat instead of fossil fuel.")
-    with c2:
-        st.markdown("#### 🌍 Decarbonise steam\nReduce CO₂ emissions from your existing boiler plant.")
-    with c3:
-        st.markdown("#### 🧩 Easy integration\nModular skid that ties into your existing process utilities.")
-
+if current_page == "Welcome":
+    # Clean welcome page
+    st.markdown("""
+    <div style='text-align: center; padding: 3rem 2rem;'>
+        <h1 style='color: #0066cc; font-size: 3rem; margin-bottom: 1.5rem;'>
+            Mechapres Heat Pump Calculator
+        </h1>
+        <p style='color: #4d4d4d; font-size: 1.25rem; line-height: 1.8; margin-bottom: 3rem;'>
+            Assess the feasibility and benefits of high-temperature heat pumps for your industrial process
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Blue banner with key benefits
+    st.markdown("""
+    <div style='background: linear-gradient(135deg, #0066cc 0%, #3399ff 100%); 
+                padding: 3rem 2rem; 
+                border-radius: 20px; 
+                margin-bottom: 3rem;
+                text-align: center;
+                box-shadow: 0 10px 40px rgba(0, 102, 204, 0.3);'>
+        <h2 style='color: white; font-size: 2rem; margin-bottom: 1.5rem;'>
+            Industrial Heat Pump Solutions
+        </h2>
+        <p style='color: white; font-size: 1.25rem; line-height: 1.8; margin: 0;'>
+            High-temperature heat pumps for steam and hot water generation up to 150°C
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Three key benefits
+    st.markdown("## Key Benefits")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("""
+        ### 💰 Cost Savings
+        
+        Reduce energy costs by utilizing waste heat and off-peak electricity 
+        instead of fossil fuels.
+        """)
+    
+    with col2:
+        st.markdown("""
+        ### 🌍 Carbon Reduction
+        
+        Eliminate scope 1 emissions from industrial heating processes 
+        and meet sustainability targets.
+        """)
+    
+    with col3:
+        st.markdown("""
+        ### ⚡ Efficient Technology
+        
+        High-performance systems with excellent COPs and seamless 
+        integration capabilities.
+        """)
+    
     st.markdown("---")
+    
+    # What you get from calculator
+    st.markdown("## What This Calculator Provides")
+    
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        st.markdown("""
+        ✅ **Technical Feasibility Assessment**  
+        ✅ **Energy Cost Analysis**  
+        ✅ **ROI & Payback Period**
+        """)
+    
+    with col_b:
+        st.markdown("""
+        ✅ **Carbon Emission Reduction**  
+        ✅ **Investment Estimates**  
+        ✅ **Downloadable PDF Report**
+        """)
+    
+    st.markdown("---")
+    
+    # CTA
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🚀 Start Assessment", key="get_quote", use_container_width=True, type="primary"):
+            st.session_state.current_page = 1
+            st.rerun()
+    
+    st.info("**Complete the assessment in approximately 5 minutes**")
 
-    if st.button("🚀 Get a quote", key="welcome_quote", use_container_width=True):
-        st.session_state.welcome_hint = (
-            "Great – now move to **1️⃣ Project** at the top, then **2️⃣ Economics** and finally **✅ Results** "
-            "to see your tailored Mechapres estimate."
-        )
 
-    if st.session_state.welcome_hint:
-        st.success(st.session_state.welcome_hint)
 
-    st.info("You can move between the tabs at the top at any time. Your answers are remembered automatically.")
+elif current_page == "Basic Site Parameters":
+    st.title("Basic Site Parameters")
+    st.markdown("Tell us about your industrial process and current heat supply.")
 
-# ===== Tab 1: Project =====
-with tabs[1]:
-    st.title("Step 1 — Project")
-    st.markdown("Answer a few quick questions. We’ll check feasibility and set sensible assumptions for your site.")
-
-    st.markdown("### Your goals")
-    ambitions = st.multiselect(
-        "My reasons to act…",
-        ["Reduce energy cost","Increase comfort","Need renovation","Compliance","Improve competitiveness","CSR goals"],
-        default=st.session_state.get("ambitions",["Reduce energy cost","CSR goals"])
-    )
-    st.session_state["ambitions"] = ambitions
-
-    st.markdown("### Basic site parameters")
     colA, colB = st.columns(2)
-    process_temp = colA.number_input(
+    
+    st.session_state.process_temp = colA.number_input(
         "Process temperature (°C)",
         20.0, 300.0,
-        st.session_state.get("process_temp",150.0),
-        key="process_temp",
+        value=st.session_state.process_temp,
+        step=1.0,
+        format="%.0f",
         help="Typical operating temperature of your industrial process that needs heat."
     )
-    energy_vector = colB.selectbox(
+    
+    st.session_state.energy_vector = colB.selectbox(
         "Energy vector used to provide heat",
-        ["Steam","Hot Water","Hot Air"],
-        key="energy_vector",
+        ["Steam", "Hot Water", "Hot Air"],
+        index=["Steam", "Hot Water", "Hot Air"].index(st.session_state.energy_vector),
         help="The main medium currently used to supply heat to your process."
     )
 
-    heat_supply_tech = st.selectbox(
+    st.session_state.heat_supply_tech = st.selectbox(
         "How are you providing heat to the process?",
         ["Fossil fuel boiler", "Electric boiler", "Industrial heat pump", "Combined heat and power", "Other"],
-        key="heat_supply_tech",
+        index=["Fossil fuel boiler", "Electric boiler", "Industrial heat pump", "Combined heat and power", "Other"].index(st.session_state.heat_supply_tech),
         help="Select the main technology currently providing heat to this process."
     )
 
     colC, colD = st.columns(2)
-    T_out2 = colC.number_input(
+    
+    st.session_state.T_out2 = colC.number_input(
         "Required supply temperature (°C)",
         50.0, 250.0,
-        st.session_state.get("T_out2",150.0),
-        key="T_out2"
+        value=st.session_state.T_out2,
+        step=1.0,
+        format="%.0f"
     )
-    steam_p = None
+    
     if st.session_state.energy_vector == "Steam":
-        steam_p = colD.number_input(
+        st.session_state.steam_p = colD.number_input(
             "Steam supply pressure (barA)",
             1.0, 20.0,
-            st.session_state.get("steam_p",5.0),
-            key="steam_p",
+            value=st.session_state.steam_p,
+            step=1.0,
+            format="%.0f",
             help="Operating pressure of your steam line in bar absolute."
         )
 
     colD1, colD2 = st.columns(2)
-    prod_days = colD1.number_input(
+    
+    st.session_state.prod_days = colD1.number_input(
         "Days of production per year",
         1, 365,
-        st.session_state.get("prod_days", 250),
-        key="prod_days",
-        help="How many days in a typical year your process is running (not necessarily 365)."
+        value=st.session_state.prod_days,
+        help="How many days in a typical year your process is running."
     )
-    prod_hours_day = colD2.number_input(
+    
+    st.session_state.prod_hours_per_day = colD2.number_input(
         "Hours of production per day",
         1, 24,
-        st.session_state.get("prod_hours_per_day", 12),
-        key="prod_hours_per_day",
+        value=st.session_state.prod_hours_per_day,
         help="Average number of hours per production day that the process is running."
     )
 
-    operating_hours_est = float(prod_days) * float(prod_hours_day)
-    st.markdown(f"**Implied operating hours per year:** `{operating_hours_est:.0f} h/year`")
+    operating_hours_est = calculate_operating_hours()
+    # st.info(f"**Operating hours per year:** {operating_hours_est:.0f} h/year")  # Hidden per user request
 
-    colE1, colE2 = st.columns(2)
-    waste_heat_captured = colE1.radio(
-        "Is the waste heat captured from the current process?",
-        ["Yes","No"],
-        index=0 if st.session_state.get("waste_heat_captured","No") == "Yes" else 1,
-        key="waste_heat_captured",
-        help="Waste heat is 'captured' if it is already collected in ducting/pipework or a heat recovery system rather than being vented."
-    )
-    has_waste_heat_processor = colE2.radio(
-        "Do you have a waste heat processor?",
-        ["Yes","No"],
-        index=0 if st.session_state.get("has_waste_heat_processor","No") == "Yes" else 1,
-        key="has_waste_heat_processor",
-        help="Select **Yes** if you already have equipment that uses waste heat (e.g. a heat recovery unit or ORC)."
-    )
+    navigation_buttons()
 
-    st.markdown("### Waste heat")
-    has_waste = st.radio(
-        "Do you have waste heat from current processes?",
-        ["Yes","No"],
-        index=0 if st.session_state.get("has_waste","Yes") == "Yes" else 1,
-        key="has_waste",
-        help="Waste heat = heat that is currently rejected to air, water, or a cooling system and is not fully used in your process."
-    )
+elif current_page == "Waste Heat":
+    st.title("Waste Heat Assessment")
+    
+    st.markdown("""
+    <div style='background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); 
+                padding: 1rem 1.25rem; 
+                border-radius: 8px; 
+                border-left: 4px solid #2563eb;
+                margin-bottom: 1.25rem;'>
+        <p style='margin: 0; font-size: 15px; color: #1e40af; line-height: 1.5;'>
+            <strong>🔍 Why this matters:</strong> Understanding your waste heat streams is crucial for determining 
+            heat pump viability and sizing. This assessment helps us identify the best recovery strategy for your facility.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
-    colR1, colR2 = st.columns(2)
-    how_released = colR1.radio(
-        "How is the waste heat released?",
-        ["Dedicated cooling system or exhaust pipe",
-         "General ventilation in the production area",
-         "Other / Not sure"],
-        index=0,
-        key="how_released",
-        help="If it mainly escapes via general room ventilation, a direct heat-recovery solution may be more suitable than a heat pump."
+    st.markdown("### 🎯 Waste Heat Availability")
+    
+    st.session_state.has_waste = st.radio(
+        "**Do you have waste heat from your current processes?**",
+        ["Yes", "No"],
+        index=["Yes", "No"].index(st.session_state.has_waste),
+        help="Waste heat = heat that is currently rejected to air, water, or a cooling system and is not fully used in your process.",
+        horizontal=True
     )
 
-    colE, colF = st.columns(2)
-    w_temp_known = colE.radio(
-        "Is the waste-heat temperature known?",
-        ["Yes","No"],
-        index=0 if st.session_state.get("w_temp_known","Yes") == "Yes" else 1,
-        key="w_temp_known",
-        help="**Yes** if you have measurements or design data (e.g. exhaust at 120°C). **No** if you only have a rough idea."
-    )
-    w_temp = None
-    if st.session_state.w_temp_known == "Yes":
-        w_temp = colF.number_input(
-            "Waste-heat temperature (°C)",
-            0.0, 250.0,
-            st.session_state.get("w_temp", 100.0),
-            key="w_temp"
+    if st.session_state.has_waste == "Yes":
+        st.markdown("<div style='margin: 1rem 0;'></div>", unsafe_allow_html=True)
+        
+        # Section 1: Release Method
+        st.markdown("""
+        <div style='background: #ffffff; 
+                    padding: 1rem 1.25rem; 
+                    border-radius: 8px; 
+                    border: 2px solid #e5e7eb;
+                    margin-bottom: 1rem;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.05);'>
+            <h4 style='margin: 0 0 0.75rem 0; color: #1f2937; font-size: 16px;'>📤 1. Waste Heat Release Method</h4>
+        """, unsafe_allow_html=True)
+        
+        st.session_state.how_released = st.selectbox(
+            "How is the waste heat currently released?",
+            ["Dedicated cooling system or exhaust pipe",
+             "General ventilation in the production area",
+             "Other / Not sure"],
+            index=["Dedicated cooling system or exhaust pipe",
+                   "General ventilation in the production area",
+                   "Other / Not sure"].index(st.session_state.how_released),
+            help="If not captured through an exhaust pipe it might not be possible to recover it."
         )
+        
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    colG, colH = st.columns(2)
-    w_amt_known = colG.radio(
-        "Do you know how much heat is released as waste?",
-        ["Yes","No"],
-        index=1 if st.session_state.get("w_amt_known","No") == "No" else 0,
-        key="w_amt_known",
-        help="**Yes** if you know the thermal power or flow rate of the waste stream. **No** if you prefer a percentage estimate."
-    )
+        # Section 2: Temperature Information
+        st.markdown("""
+        <div style='background: #ffffff; 
+                    padding: 1rem 1.25rem; 
+                    border-radius: 8px; 
+                    border: 2px solid #e5e7eb;
+                    margin-bottom: 1rem;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.05);'>
+            <h4 style='margin: 0 0 0.75rem 0; color: #1f2937; font-size: 16px;'>🌡️ 2. Temperature Information</h4>
+        """, unsafe_allow_html=True)
+        
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            st.session_state.w_temp_known = st.radio(
+                "Do you know the waste heat temperature?",
+                ["Yes", "No"],
+                index=["Yes", "No"].index(st.session_state.w_temp_known),
+                help="If Yes, please provide the value. If No, we'll use the process temperature."
+            )
+        
+        with col2:
+            if st.session_state.w_temp_known == "Yes":
+                st.session_state.w_temp = st.number_input(
+                    "Waste heat temperature (°C)",
+                    0.0, 250.0,
+                    value=st.session_state.w_temp,
+                    step=1.0,
+                    format="%.0f",
+                    help="The temperature of your waste heat stream"
+                )
+            else:
+                st.markdown("<div style='padding-top: 1.5rem;'></div>", unsafe_allow_html=True)
+                st.info("💡 We'll use your process temperature as an estimate")
+        
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    q_waste_kw = None
-    if st.session_state.w_amt_known == "Yes":
-        q_waste_kw = colH.number_input(
-            "Waste heat available (kW)",
-            0.0, 100000.0,
-            st.session_state.get("q_waste_kw", 1000.0),
-            key="q_waste_kw",
-            help="Numerical input Q_waste, used to refine the economic calculation."
-        )
-        w_amt_band = None
+        # Section 3: Quantity Information
+        st.markdown("""
+        <div style='background: #ffffff; 
+                    padding: 1rem 1.25rem; 
+                    border-radius: 8px; 
+                    border: 2px solid #e5e7eb;
+                    margin-bottom: 1rem;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.05);'>
+            <h4 style='margin: 0 0 0.75rem 0; color: #1f2937; font-size: 16px;'>⚡ 3. Quantity Information</h4>
+        """, unsafe_allow_html=True)
+        
+        col3, col4 = st.columns([1, 1])
+        
+        with col3:
+            st.session_state.w_amt_known = st.radio(
+                "Do you know the amount of waste heat available?",
+                ["Yes", "No"],
+                index=["Yes", "No"].index(st.session_state.w_amt_known),
+                help="Yes if you know the thermal power or flow rate of the waste stream."
+            )
+
+        with col4:
+            if st.session_state.w_amt_known == "Yes":
+                st.session_state.q_waste_kw = st.number_input(
+                    "Waste heat available (kW)",
+                    0.0, 100000.0,
+                    value=st.session_state.q_waste_kw,
+                    step=1.0,
+                    format="%.0f",
+                    help="The thermal power of your waste heat stream"
+                )
+            else:
+                st.session_state.w_amt_band = st.selectbox(
+                    "Estimate as % of energy input",
+                    ["10–30% of energy input", "31–50% of energy input", "51–80% of energy input"],
+                    index=["10–30% of energy input", "31–50% of energy input", "51–80% of energy input"].index(st.session_state.w_amt_band),
+                    help="Estimate what fraction of your total energy input is ultimately rejected as waste heat."
+                )
+        
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # Section 4: Current Utilization
+        st.markdown("""
+        <div style='background: #ffffff; 
+                    padding: 1rem 1.25rem; 
+                    border-radius: 8px; 
+                    border: 2px solid #e5e7eb;
+                    margin-bottom: 1rem;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.05);'>
+            <h4 style='margin: 0 0 0.75rem 0; color: #1f2937; font-size: 16px;'>🔄 4. Current Waste Heat Utilization</h4>
+        """, unsafe_allow_html=True)
+        
+        col5, col6 = st.columns(2)
+        
+        with col5:
+            st.session_state.waste_heat_captured = st.radio(
+                "Is the waste heat currently captured?",
+                ["Yes", "No"],
+                index=["Yes", "No"].index(st.session_state.waste_heat_captured),
+                help="Waste heat is 'captured' if it is already collected in ducting/pipework or a heat recovery system."
+            )
+        
+        with col6:
+            st.session_state.has_waste_heat_processor = st.radio(
+                "Do you have existing waste heat recovery equipment?",
+                ["Yes", "No"],
+                index=["Yes", "No"].index(st.session_state.has_waste_heat_processor),
+                help="Select Yes if you already have equipment that uses waste heat (e.g. a heat recovery unit or ORC)."
+            )
+        
+        st.markdown("</div>", unsafe_allow_html=True)
+        
     else:
-        w_amt_band = colH.selectbox(
-            "Estimate waste heat fraction",
-            ["10–30% of energy input",
-             "31–50% of energy input",
-             "51–80% of energy input"],
-            index=1,
-            key="w_amt_band",
-            help="Estimate what fraction of your total energy input is ultimately rejected as waste heat."
-        )
+        st.markdown("<div style='margin: 1rem 0;'></div>", unsafe_allow_html=True)
+        st.warning("""
+        ⚠️ **No waste heat available**
+        
+        Heat pumps work best when waste heat is available to provide the base heat source. 
+        Without waste heat, you might want to consider:
+        - Direct electric heating solutions
+        - Air-source heat pumps (if applicable for your temperature requirements)
+        - Other decarbonization technologies
+        
+        We can still help you explore options - please continue with the assessment.
+        """)
 
-    st.markdown("#### Waste-heat medium")
-    default_form = "Hot water"
-    if energy_vector == "Steam":
-        default_form = "Pure steam"
-    elif energy_vector == "Hot Water":
-        default_form = "Hot water"
-    elif energy_vector == "Hot Air":
-        default_form = "Dry hot air"
+    navigation_buttons()
 
-    waste_form = st.selectbox(
-        "In which form is waste heat available?",
-        ["Humid air","Dry hot air","Hot water","Pure steam","Don't know"],
-        index=["Humid air","Dry hot air","Hot water","Pure steam","Don't know"].index(default_form),
-        key="waste_form",
-        help="This helps to characterise the heat-pump connection (air, water, steam)."
+elif current_page == "Waste Heat Medium":
+    st.title("Waste Heat Medium & System Overview")
+    st.markdown("**Understanding the form of your waste heat helps us design the optimal heat pump solution.**")
+
+    process_temp = st.session_state.process_temp
+    T_out2 = st.session_state.T_out2
+    energy_vector = st.session_state.energy_vector
+    waste_temp = st.session_state.w_temp if st.session_state.w_temp_known == "Yes" else process_temp
+    
+    temp_lift = max(0, T_out2 - waste_temp)
+
+    st.markdown("### 📊 Your System Overview")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Process Temperature", f"{process_temp:.0f}°C")
+    with col2:
+        st.metric("Waste Heat", f"{waste_temp:.0f}°C")
+    with col3:
+        st.metric("Supply Temperature", f"{T_out2:.0f}°C")
+    with col4:
+        st.metric("Temperature Lift", f"+{temp_lift:.0f}°C")
+
+    st.info(f"**System Summary:** Your waste heat at **{waste_temp:.0f}°C** will be upgraded by the Mechapres heat pump to deliver **{energy_vector.lower()}** at **{T_out2:.0f}°C** (Temperature lift: **+{temp_lift:.0f}°C**)")
+
+    st.markdown("---")
+
+    st.markdown("### 🧪 Waste Heat Medium Type")
+    st.markdown("**Select the form of your waste heat. This determines the heat exchanger design for your heat pump.**")
+    
+    st.info("""
+    **Guide to selecting waste heat medium:**
+    - **Humid Air**: Use if the exhausts are a mix of water vapours and external air
+    - **Dry Hot Air**: Use if the exhausts are expected to contain very little water vapours
+    - **Hot Water**: For waste heat in liquid form such as warm condensate
+    - **Pure Steam**: Use if the exhausts consist mainly of water vapour and none to very little external air
+    """)
+    
+    form_options = ["Humid air", "Dry hot air", "Hot water", "Pure steam", "Don't know"]
+    
+    st.session_state.waste_form = st.selectbox(
+        "Waste heat medium:",
+        form_options,
+        index=form_options.index(st.session_state.waste_form) if st.session_state.waste_form in form_options else 2,
+        help="Select the form that best matches your waste heat stream."
     )
 
-    humidity_ratio_known = None
-    if waste_form == "Humid air":
-        humidity_ratio_known = st.radio(
-            "Is the humidity ratio of the air known?",
-            ["Yes","No"],
-            index=1,
-            key="humidity_ratio_known",
-            help="If unknown, typical values will be assumed and refined during a detailed study."
-        )
+    # Medium-specific guidance
+    waste_form = st.session_state.waste_form
+    if waste_form == "Hot water":
+        st.success("✅ **Excellent choice!** Hot water waste streams provide the best heat transfer efficiency and are ideal for heat pump integration.")
+    elif waste_form == "Pure steam":
+        st.success("✅ **Very good choice!** Steam condensation provides excellent heat transfer characteristics and high efficiency.")
+    elif waste_form == "Dry hot air":
+        st.info("ℹ️ **Good option.** Air-to-refrigerant heat exchangers work well, though efficiency may be slightly lower than liquid streams.")
+    elif waste_form == "Humid air":
+        st.warning("⚠️ **Feasible but requires careful design.** Humid air can work well but needs consideration for condensation and corrosion management.")
 
+    if waste_form == "Humid air":
+        st.markdown("### 💧 Humidity Information")
+        st.session_state.humidity_ratio_known = st.radio(
+            "Do you know the humidity ratio of the waste air?",
+            ["Yes", "No"],
+            index=["Yes", "No"].index(st.session_state.humidity_ratio_known),
+            help="If unknown, we'll use typical values and refine them during the detailed design phase."
+        )
+        
+        if st.session_state.humidity_ratio_known == "Yes":
+            st.success("💡 **Great!** Having humidity data helps us design more accurate heat recovery systems.")
+        else:
+            st.info("💡 **No problem.** We'll estimate typical humidity values for your application.")
+
+    st.markdown("---")
+
+    # Feasibility assessment
     gate = evaluate_decision_tree(
-        process_temp_c=st.session_state.process_temp,
-        energy_vector=st.session_state.energy_vector,
-        target_supply_temp_c=st.session_state.T_out2,
-        steam_pressure_barA=steam_p,
+        process_temp_c=process_temp,
+        energy_vector=energy_vector,
+        target_supply_temp_c=T_out2,
+        steam_pressure_barA=st.session_state.steam_p if energy_vector == "Steam" else None,
         has_waste_heat=(st.session_state.has_waste == "Yes"),
         waste_temp_known=(st.session_state.w_temp_known == "Yes"),
-        waste_temp_c=w_temp,
+        waste_temp_c=waste_temp,
         waste_amount_known=(st.session_state.w_amt_known == "Yes"),
-        waste_amount_pct_band=w_amt_band,
-        waste_heat_captured=st.session_state.get("waste_heat_captured"),
-        has_waste_heat_processor=st.session_state.get("has_waste_heat_processor"),
-        how_released=how_released,
+        waste_amount_pct_band=st.session_state.w_amt_band,
+        waste_heat_captured=st.session_state.waste_heat_captured,
+        has_waste_heat_processor=st.session_state.has_waste_heat_processor,
+        how_released=st.session_state.how_released,
         waste_form=waste_form if waste_form != "Don't know" else None,
-        humidity_ratio_known=humidity_ratio_known,
-        q_waste_kw=q_waste_kw
+        humidity_ratio_known=st.session_state.humidity_ratio_known,
+        q_waste_kw=st.session_state.q_waste_kw if st.session_state.w_amt_known == "Yes" else None
     )
     st.session_state._gate = gate
 
+    st.markdown("### ✅ Preliminary Feasibility Assessment")
     if gate["status"] == "not_viable":
-        st.error("Not viable for a heat pump with the current inputs (see notes below).")
+        st.error("❌ **Not suitable for heat pump applications**")
+        st.markdown("**Reasons:**")
+        for note in gate["notes"]:
+            st.write(f"• {note}")
     elif gate["status"] == "suggest_hx":
-        st.warning("This case looks better suited to a heat-exchanger project than a heat pump.")
+        st.warning("⚠️ **Heat exchanger may be more suitable than a heat pump**")
+        st.markdown("**Considerations:**")
+        for note in gate["notes"]:
+            st.write(f"• {note}")
     elif gate["status"] == "caution":
-        st.info("Feasible with caveats (see notes below).")
-    for n in gate["notes"]:
-        st.write(f"- {n}")
+        st.info("✅ **Heat pump is feasible with some considerations**")
+        st.markdown("**Notes:**")
+        for note in gate["notes"]:
+            st.write(f"• {note}")
+    else:
+        st.success("✅ **Excellent heat pump application!**")
+        st.markdown("**Advantages identified:**")
+        for note in gate["notes"]:
+            st.write(f"• {note}")
 
-# ===== Tab 2: Economics =====
-with tabs[2]:
-    st.title("Step 2 — Economics")
-    gate = st.session_state.get("_gate", {"assumptions": {}})
+    navigation_buttons()
 
-    if gate.get("status") == "not_viable":
-        st.warning("The screening indicates this case is **not viable for a heat pump**. "
-                   "You can still explore indicative economics, but results should be treated with caution.")
+elif current_page == "Demand & Energy Prices":
+    st.title("Demand & Energy Prices")
+    st.markdown("Help us calculate your potential savings by providing energy costs and consumption.")
 
-    st.markdown("### Demand & energy prices")
-
-    # Operating hours (from Step 1 by default)
-    default_hours = float(st.session_state.get("prod_days", 250)) * float(st.session_state.get("prod_hours_per_day", 12))
-    default_hours = max(100.0, min(default_hours, 8760.0))
-
+    # Calculate suggested operating hours
+    suggested_hours = calculate_operating_hours()
+    
     e0, e1 = st.columns(2)
-    operating_hours  = e0.number_input(
+    
+    st.session_state.operating_hours = e0.number_input(
         "Operating hours per year",
         100.0, 8760.0,
-        default_hours,
-        help="Pre-filled from your inputs: days of production × hours per day. You can adjust if needed."
+        value=st.session_state.operating_hours,
+        step=1.0,
+        format="%.0f",
+        help=f"Calculated from your inputs: {st.session_state.prod_days} days × {st.session_state.prod_hours_per_day} hours = {suggested_hours:.0f} hours. You can adjust if needed."
     )
 
-    yearly_cost = e1.number_input(
-        "Approx. annual energy spend for this process ( £/year )",
+    st.session_state.yearly_cost = e1.number_input(
+        "Approx. annual energy spend for this process (£/year)",
         0.0, 1_000_000_000.0,
-        500_000.0,
+        value=st.session_state.yearly_cost,
+        step=1.0,
+        format="%.0f",
         help="Cost of fuel or electricity currently used to run this process (not the whole site)."
     )
 
-    # Fuel type selection with embedded emission factors
-    e2, e3 = st.columns(2)
-    default_fuel = st.session_state.get("fuel_type", "Natural gas")
-    if default_fuel not in FUEL_OPTIONS:
-        default_fuel = "Natural gas"
-    fuel_type = e2.selectbox(
-        "Fuel type used by the current system",
-        FUEL_OPTIONS,
-        index=FUEL_OPTIONS.index(default_fuel),
-        help="Emission factors are based on kgCO₂ per kWh (Net CV) for the selected fuel."
-    )
-    st.session_state["fuel_type"] = fuel_type
+    heat_supply_tech = st.session_state.heat_supply_tech
+    uses_fuel = system_uses_fuel(heat_supply_tech)
+    
+    st.markdown(f"**Current heat supply technology:** {heat_supply_tech}")
+    st.markdown("---")
+    
+    if not uses_fuel:
+        st.info("ℹ️ **Note:** Electric-based systems don't require fuel inputs. Only electricity pricing is needed below.")
 
-    # Prices are in £/MWh – easier for industrial users
-    fuel_price = e3.number_input(
-        "Fuel cost ( £/MWh )",
-        0.0, 300.0, 30.0,
-        help="Average cost of the fuel used by your current system."
-    )
+    # Fuel inputs (only for fuel-based systems)
+    if uses_fuel:
+        e2, e3 = st.columns(2)
+        
+        st.session_state.fuel_type = e2.selectbox(
+            "Fuel type used by the current system",
+            FUEL_OPTIONS,
+            index=FUEL_OPTIONS.index(st.session_state.fuel_type) if st.session_state.fuel_type in FUEL_OPTIONS else 3
+        )
 
+        st.session_state.fuel_price = e3.number_input(
+            "Fuel cost (£/MWh)",
+            0.0, 300.0,
+            value=st.session_state.fuel_price
+        )
+
+    # Electricity and efficiency
     e4, e5 = st.columns(2)
-    electricity_price = e4.number_input(
-        "Electricity cost ( £/MWh )",
-        0.0, 300.0, 90.0,
-        help="Electricity tariff that would be used to power the heat pump."
+    
+    st.session_state.electricity_price = e4.number_input(
+        "Electricity cost (£/MWh)",
+        0.0, 300.0,
+        value=st.session_state.electricity_price
     )
-    boiler_eff_pct = e5.number_input(
+    
+    # Suggest efficiency based on heat supply technology
+    suggested_eff = get_efficiency_default(heat_supply_tech)
+    
+    st.session_state.boiler_eff_pct = e5.number_input(
         "Existing system efficiency (%)",
         40.0, 100.0,
-        80.0 if st.session_state.get("heat_supply_tech","Fossil fuel boiler") == "Fossil fuel boiler" else 95.0,
-        help="Use ~80% for fossil boilers, ~95% for electric boilers/HP."
+        value=suggested_eff if st.session_state.boiler_eff_pct == 80.0 else st.session_state.boiler_eff_pct,
+        step=1.0,
+        format="%.0f",
+        help="Typical values: 80% for fossil fuel boilers, 95% for electric boilers, 90% for CHP or heat pumps (use design COP for industrial heat pumps)."
     )
-    boiler_eff = boiler_eff_pct / 100.0
 
-    st.markdown("#### Annual energy costs (scale of site)")
-    band_options = ["<£100k","£100k–£500k",">£500k"]
-    annual_band = st.radio(
+    # Store efficiency as decimal
+    st.session_state.boiler_eff = st.session_state.boiler_eff_pct / 100.0
+
+    navigation_buttons()
+
+elif current_page == "Annual Energy Costs":
+    st.title("Annual Energy Costs (Scale of Site)")
+    st.markdown("This helps us understand the scale of your operation for better recommendations.")
+
+    band_options = ["<£100k", "£100k–£500k", ">£500k"]
+    st.session_state.annual_band = st.radio(
         "Approximate annual energy spend category",
         band_options,
-        index=band_options.index(st.session_state.get("annual_band","£100k–£500k")),
-        horizontal=True,
-        key="annual_band"
+        index=band_options.index(st.session_state.annual_band),
+        horizontal=True
     )
 
-    # CO2 factors in the background
-    emission_factor_fuel_kWh = FUEL_EMISSION_FACTORS_KG_PER_KWH[fuel_type]
-    emission_factor_fuel_MWh = emission_factor_fuel_kWh * 1000.0
+    # Display emission factors
+    heat_supply_tech = st.session_state.heat_supply_tech
+    uses_fuel = system_uses_fuel(heat_supply_tech)
+    
+    fuel_type = st.session_state.fuel_type
+    emission_factor_fuel_kWh = FUEL_EMISSION_FACTORS_KG_PER_KWH.get(fuel_type, 0.2027)
     emission_factor_elec = ELECTRICITY_CO2_KG_PER_MWH
-    st.caption(
-        f"Using **{emission_factor_fuel_kWh:.3f} kgCO₂/kWh** (Net CV) for {fuel_type} "
-        f"and **{emission_factor_elec:.0f} kgCO₂/MWh** for electricity (applied in the background)."
-    )
-
-    # --------- Derive Q_process from annual cost (Excel-style) ---------
-    unit_cost_baseline = fuel_price if fuel_price > 0 else max(electricity_price, 1.0)
-
-    Q_process_guess = 100.0
-    if unit_cost_baseline > 0 and operating_hours > 0:
-        energy_purchased_MWh = yearly_cost / unit_cost_baseline
-        useful_MWh = energy_purchased_MWh * boiler_eff
-        Q_process_guess = max(10.0, useful_MWh * 1000.0 / operating_hours)
-
-    Q_process = st.number_input(
-        "Estimated average process heat demand (kW)",
-        10.0, 50000.0,
-        float(Q_process_guess),
-        help="Calculated from your annual energy spend and efficiency. You can adjust if needed."
-    )
-
-    # --------- Technical performance (Simple HP model) ---------
-    gate = st.session_state.get("_gate", {"assumptions": {}})
-    T_in1 = gate["assumptions"].get(
-        "T_in1",
-        st.session_state.get("w_temp", st.session_state.get("process_temp", 120.0))
-    )
-    T_out2 = st.session_state.get("T_out2", 150.0)
-    P_out2 = 5.0
-    T_app_condenser = 8.0
-    T_app_evap      = 8.0
-    T_ev_minimum    = 70.0
-    lorentz_eff     = 0.60
-
-    waste_pct_assumed = gate["assumptions"].get("waste_pct", 40)
-    waste_min_pct = max(10, min(90, waste_pct_assumed - 10))
-    waste_max_pct = max(waste_min_pct + 5, min(100, waste_pct_assumed + 10))
-
-    perf = excel_performance_logic(
-        T_in1=T_in1, T_out2=T_out2, P_out2=P_out2, Q_process=Q_process,
-        T_app_condenser=T_app_condenser, T_app_evaporator=T_app_evap,
-        T_ev_minimum=T_ev_minimum, lorentz_eff=lorentz_eff,
-        waste_heat_min_pct=waste_min_pct, waste_heat_max_pct=waste_max_pct
-    )
-
-    if perf["COP_real"] <= 0 or not math.isfinite(perf["E_max_kW"]):
-        st.error("❌ Estimated COP not feasible with the current temperature assumptions. "
-                 "Please review Step 1 (supply & waste-heat temperatures).")
+    
+    if uses_fuel:
+        st.info(f"**Emission factors used:** {emission_factor_fuel_kWh:.3f} kgCO₂/kWh for {fuel_type} and {emission_factor_elec:.0f} kgCO₂/MWh for electricity")
     else:
-        # --------- Baseline vs Mechapres energy & CO2 ---------
-        Q_steam_MWh = (Q_process * operating_hours) / 1000.0
-        COP_mechapres = perf["COP_real"]
-        E_hp_electric_MWh = Q_steam_MWh / COP_mechapres
+        st.info(f"**Emission factors used:** {emission_factor_elec:.0f} kgCO₂/MWh for electricity (comparing to {emission_factor_fuel_kWh:.3f} kgCO₂/kWh natural gas baseline)")
 
-        # baseline input energy: Q / efficiency
+    # Calculate Q_process
+    if uses_fuel:
+        unit_cost_baseline = st.session_state.fuel_price
+    else:
+        unit_cost_baseline = st.session_state.electricity_price
+    
+    operating_hours = st.session_state.operating_hours
+    yearly_cost = st.session_state.yearly_cost
+    boiler_eff = st.session_state.boiler_eff
+
+    Q_process_calculated = 100.0
+    if unit_cost_baseline > 0 and operating_hours > 0:
+        try:
+            energy_purchased_MWh = yearly_cost / unit_cost_baseline
+            useful_MWh = energy_purchased_MWh * boiler_eff
+            Q_process_calculated = max(10.0, useful_MWh * 1000.0 / operating_hours)
+        except (ZeroDivisionError, ValueError):
+            Q_process_calculated = 100.0
+
+    # Initialize manual override flag if not set
+    if "q_process_manual_override" not in st.session_state:
+        st.session_state.q_process_manual_override = False
+    
+    # Display calculated value with option to manually override
+    st.markdown("---")
+    st.markdown("### 🔧 Process Heat Demand")
+    
+    st.info(f"💡 **Calculated estimate:** {Q_process_calculated:,.0f} kW (based on your annual energy spend and system efficiency)")
+    
+    # Ask if user wants to manually change it
+    st.session_state.q_process_manual_override = st.radio(
+        "**Do you want to manually change this value?**",
+        ["No, use the calculated estimate", "Yes, I want to enter my own value"],
+        index=1 if st.session_state.q_process_manual_override else 0,
+        help="This is the estimated average process heat demand, based on your answers. You can accept our calculation or enter your own value if you have more accurate data."
+    )
+    
+    manual_override = (st.session_state.q_process_manual_override == "Yes, I want to enter my own value")
+    
+    if manual_override:
+        # Show editable input
+        Q_process = st.number_input(
+            "Enter your process heat demand (kW)",
+            10.0, 50000.0,
+            value=st.session_state.get("Q_process", Q_process_calculated),
+            help="Enter the average thermal power required for your industrial process."
+        )
+        st.success("✅ Using your manually entered value")
+    else:
+        # Use calculated value, show as metric
+        Q_process = Q_process_calculated
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.metric(
+                "Estimated Average Process Heat Demand", 
+                f"{Q_process:,.0f} kW",
+                help="This value is calculated from your annual energy spend and system efficiency"
+            )
+        st.success("✅ Using calculated estimate based on your inputs")
+
+    # Store calculated values
+    st.session_state.Q_process = Q_process
+    st.session_state.emission_factor_fuel_kWh = emission_factor_fuel_kWh
+    st.session_state.emission_factor_elec = emission_factor_elec
+
+    navigation_buttons()
+
+elif current_page == "Investment Variables":
+    st.title("Investment Variables")
+    st.markdown("Set the cost assumptions for your heat pump investment analysis.")
+
+    inv1, inv2 = st.columns(2)
+    
+    st.session_state.design_pm = inv1.number_input(
+        "Design and project management (£)",
+        0.0, 10_000_000.0,
+        value=st.session_state.design_pm,
+        help="Indicative allowance for design and project management."
+    )
+    
+    st.session_state.fixed_install = inv2.number_input(
+        "Fixed installation costs (£)",
+        0.0, 10_000_000.0,
+        value=st.session_state.fixed_install,
+        help="Base installation costs that do not scale with heat-pump size."
+    )
+
+    inv3, inv4, inv5 = st.columns(3)
+    
+    st.session_state.hp_cost_per_kw = inv3.number_input(
+        "Heat pump cost (£/kW)",
+        0.0, 5_000.0,
+        value=st.session_state.hp_cost_per_kw
+    )
+    
+    st.session_state.hr_cost_per_kw = inv4.number_input(
+        "Heat recovery system cost (£/kW)",
+        0.0, 5_000.0,
+        value=st.session_state.hr_cost_per_kw
+    )
+    
+    st.session_state.var_install_per_kw = inv5.number_input(
+        "Variable installation costs (£/kW)",
+        0.0, 5_000.0,
+        value=st.session_state.var_install_per_kw
+    )
+
+    navigation_buttons()
+
+elif current_page == "Investment & Returns":
+    st.title("Investment & Returns")
+    
+    try:
+        # Get values
+        gate = st.session_state.get("_gate", {"assumptions": {}})
+        T_in1 = gate["assumptions"].get("T_in1", st.session_state.w_temp if st.session_state.w_temp_known == "Yes" else st.session_state.process_temp)
+        T_out2 = st.session_state.T_out2
+        Q_process = st.session_state.Q_process
+        
+        # Validate
+        if Q_process <= 0:
+            st.error("❌ Invalid process heat demand. Please go back and check your inputs.")
+            if st.button("← Go Back to Annual Energy Costs"):
+                st.session_state.current_page = 5
+                st.rerun()
+            st.stop()
+        
+        # Calculate performance
+        waste_pct_assumed = gate["assumptions"].get("waste_pct", 40)
+        waste_min_pct = max(10, min(90, waste_pct_assumed - 10))
+        waste_max_pct = max(waste_min_pct + 5, min(100, waste_pct_assumed + 10))
+
+        perf = excel_performance_logic(
+            T_in1=T_in1,
+            T_out2=T_out2,
+            P_out2=5.0,
+            Q_process=Q_process,
+            waste_heat_min_pct=waste_min_pct,
+            waste_heat_max_pct=waste_max_pct
+        )
+
+        if perf["COP_real"] <= 0:
+            st.error("❌ COP calculation failed. The temperature lift may be too high for a heat pump. Please review your temperature inputs.")
+            if st.button("← Go Back to Review Temperatures"):
+                st.session_state.current_page = 3
+                st.rerun()
+            st.stop()
+
+        # Economic calculations
+        operating_hours = st.session_state.operating_hours
+        electricity_price = st.session_state.electricity_price
+        boiler_eff = st.session_state.boiler_eff
+        
+        heat_supply_tech = st.session_state.heat_supply_tech
+        uses_fuel = system_uses_fuel(heat_supply_tech)
+        
+        if uses_fuel:
+            current_energy_price = st.session_state.fuel_price
+        else:
+            current_energy_price = electricity_price
+        
+        Q_steam_MWh = (Q_process * operating_hours) / 1000.0
+        E_hp_electric_MWh = Q_steam_MWh / perf["COP_real"]
         E_current_MWh = Q_steam_MWh / boiler_eff
 
-        cost_current = E_current_MWh * fuel_price
-        co2_current  = E_current_MWh * emission_factor_fuel_MWh / 1000.0  # tonnes
-
+        cost_current = E_current_MWh * current_energy_price
         cost_mechapres = E_hp_electric_MWh * electricity_price
-        co2_mechapres  = E_hp_electric_MWh * emission_factor_elec / 1000.0
-
         annual_savings_high = cost_current - cost_mechapres
-        co2_savings = co2_current - co2_mechapres
 
-        # --------- Investment variables and Low/High cases (Economic calculations sheet) ---------
-        st.markdown("### Investment variables")
-        inv1, inv2 = st.columns(2)
-        design_pm = inv1.number_input(
-            "Design and project management (£)",
-            0.0, 10_000_000.0,
-            50_000.0,
-            help="Indicative allowance for design and project management."
-        )
-        fixed_install = inv2.number_input(
-            "Fixed installation costs (£)",
-            0.0, 10_000_000.0,
-            50_000.0,
-            help="Base installation costs that do not scale with heat-pump size."
-        )
+        # CO2 calculations
+        emission_factor_elec = st.session_state.emission_factor_elec
+        
+        if uses_fuel:
+            emission_factor_fuel_kWh = st.session_state.emission_factor_fuel_kWh
+            co2_current = E_current_MWh * emission_factor_fuel_kWh
+        else:
+            co2_current = E_current_MWh * emission_factor_elec / 1000.0
+        
+        co2_mechapres = E_hp_electric_MWh * emission_factor_elec / 1000.0
+        co2_savings = max(0, co2_current - co2_mechapres)
 
-        inv3, inv4, inv5 = st.columns(3)
-        hp_cost_per_kw = inv3.number_input(
-            "Heat pump cost ( £/kW )",
-            0.0, 5_000.0, 250.0
-        )
-        hr_cost_per_kw = inv4.number_input(
-            "Heat recovery system cost ( £/kW )",
-            0.0, 5_000.0, 50.0
-        )
-        var_install_per_kw = inv5.number_input(
-            "Variable installation costs ( £/kW )",
-            0.0, 5_000.0, 10.0
-        )
+        # Investment calculations
+        design_pm = st.session_state.design_pm
+        fixed_install = st.session_state.fixed_install
+        hp_cost_per_kw = st.session_state.hp_cost_per_kw
+        hr_cost_per_kw = st.session_state.hr_cost_per_kw
+        var_install_per_kw = st.session_state.var_install_per_kw
 
-        # HP sizes – High case uses full process load; Low case ~ half
         hp_size_high_kw = max(250.0, perf["capacity_MWth"] * 1000.0)
-        hp_size_low_kw  = max(250.0, hp_size_high_kw / 2.0)
+        hp_size_low_kw = max(250.0, hp_size_high_kw / 2.0)
         hr_size_high_kw = 0.66 * hp_size_high_kw
-        hr_size_low_kw  = 0.66 * hp_size_low_kw
+        hr_size_low_kw = 0.66 * hp_size_low_kw
 
         def total_investment(hp_kw, hr_kw):
-            variable_cost = hp_kw*hp_cost_per_kw + hr_kw*hr_cost_per_kw + (hp_kw+hr_kw)*var_install_per_kw
+            variable_cost = hp_kw * hp_cost_per_kw + hr_kw * hr_cost_per_kw + (hp_kw + hr_kw) * var_install_per_kw
             return design_pm + fixed_install + variable_cost
 
-        capex_low  = total_investment(hp_size_low_kw,  hr_size_low_kw)
+        capex_low = total_investment(hp_size_low_kw, hr_size_low_kw)
         capex_high = total_investment(hp_size_high_kw, hr_size_high_kw)
 
-        # Savings: high case full; low case ~ 15% of high (based on Excel example)
         savings_high = max(annual_savings_high, 0.0)
-        savings_low  = max(0.15 * savings_high, 0.0)
+        savings_low = max(0.15 * savings_high, 0.0)
 
         def simple_payback(capex, savings):
             return capex / savings if savings > 0 else float("inf")
@@ -907,229 +1468,450 @@ with tabs[2]:
             for _ in range(60):
                 r = (low_r + high_r) / 2
                 npv = -capex
-                for t in range(1, years+1):
+                for t in range(1, years + 1):
                     npv += savings / ((1 + r) ** t)
                 if npv > 0:
                     low_r = r
                 else:
                     high_r = r
-            return (low_r + high_r) / 2 * 100.0  # %
+            return (low_r + high_r) / 2 * 100.0
 
-        payback_low  = simple_payback(capex_low,  savings_low)
+        payback_low = simple_payback(capex_low, savings_low)
         payback_high = simple_payback(capex_high, savings_high)
-        irr_low  = irr_from_savings(capex_low,  savings_low,  years=10)
+        irr_low = irr_from_savings(capex_low, savings_low, years=10)
         irr_high = irr_from_savings(capex_high, savings_high, years=10)
 
-        st.subheader("💰 Savings range")
+        # Display results
+        st.subheader("💰 Savings Range")
         s1, s2 = st.columns(2)
-        s1.metric("Annual savings — low case",  f"£{savings_low:,.0f}",  help="Conservative case with smaller heat-pump size.")
+        s1.metric("Annual savings — low case", f"£{savings_low:,.0f}", help="Conservative case with smaller heat-pump size.")
         s2.metric("Annual savings — high case", f"£{savings_high:,.0f}", help="Larger heat-pump project capturing more savings.")
 
-        st.subheader("📦 Investment and returns")
+        st.subheader("📦 Investment and Returns")
         colL, colH = st.columns(2)
 
         with colL:
-            st.markdown("**Low case** (smaller project)")
-            st.write(f"Heat pump size: **{hp_size_low_kw:,.0f} kW**")
-            st.write(f"Heat recovery size: **{hr_size_low_kw:,.0f} kW**")
+            st.markdown("**Low Case**")
             st.write(f"Total investment cost: **£{capex_low:,.0f}**")
-            st.write(f"Simple payback: **{payback_low:.1f} years**" if math.isfinite(payback_low) else "Simple payback: n/a")
+            # Format payback period
+            if math.isfinite(payback_low) and payback_low <= 10:
+                st.write(f"Simple payback: **{payback_low:.1f} years**")
+            else:
+                st.write(f"Simple payback: **>10 years**")
             st.write(f"IRR (10 years): **{irr_low:.0f}%**")
 
         with colH:
-            st.markdown("**High case** (larger project)")
-            st.write(f"Heat pump size: **{hp_size_high_kw:,.0f} kW**")
-            st.write(f"Heat recovery size: **{hr_size_high_kw:,.0f} kW**")
+            st.markdown("**High Case**")
             st.write(f"Total investment cost: **£{capex_high:,.0f}**")
-            st.write(f"Simple payback: **{payback_high:.1f} years**" if math.isfinite(payback_high) else "Simple payback: n/a")
+            # Format payback period
+            if math.isfinite(payback_high) and payback_high <= 10:
+                st.write(f"Simple payback: **{payback_high:.1f} years**")
+            else:
+                st.write(f"Simple payback: **>10 years**")
             st.write(f"IRR (10 years): **{irr_high:.0f}%**")
 
-        st.caption("Note: For projects below ~250 kW, alternative solutions may be more suitable. The calculator enforces a minimum indicative size of 250 kW.")
+        st.caption("Note: For projects below ~250 kW, alternative solutions may be more suitable.")
 
-        # Store info for Results & PDF
-        st.session_state._perf_inputs = {
-            "T_in1": T_in1, "T_out2": T_out2,
-            "T_in2": max(T_out2 - 20.0, 20.0),
-            "P_out2": P_out2,
-            "Q_process": Q_process,
-            "T_app_cond": T_app_condenser, "T_app_evap": T_app_evap,
-            "T_ev_minimum": T_ev_minimum, "lorentz_eff": lorentz_eff,
-            "waste_min_pct": waste_min_pct, "waste_max_pct": waste_max_pct
+        # Cash flow analysis
+        st.markdown("---")
+        st.subheader("📊 10-Year Cash Flow Analysis")
+        st.markdown("Visualize your investment returns over time with cumulative cash flow projections.")
+        
+        def calculate_cash_flow(capex, annual_savings, years=10):
+            cash_flow = [-capex]
+            cumulative = [-capex]
+            for year in range(1, years + 1):
+                cash_flow.append(annual_savings)
+                cumulative.append(cumulative[-1] + annual_savings)
+            return cash_flow, cumulative
+        
+        cf_low, cum_low = calculate_cash_flow(capex_low, savings_low, 10)
+        cf_high, cum_high = calculate_cash_flow(capex_high, savings_high, 10)
+        years = list(range(0, 11))
+        
+        def find_breakeven(cumulative):
+            for i, val in enumerate(cumulative):
+                if val >= 0:
+                    return i
+            return None
+        
+        breakeven_low = find_breakeven(cum_low)
+        breakeven_high = find_breakeven(cum_high)
+        
+        # Create charts
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+        fig.patch.set_facecolor('none')
+        
+        # High Case
+        ax1.fill_between(years, cum_high, 0, where=[y >= 0 for y in cum_high],
+                         alpha=0.7, color=MECHAPRES_COLORS["success"], label='Positive Return',
+                         interpolate=True)
+        ax1.fill_between(years, cum_high, 0, where=[y < 0 for y in cum_high],
+                         alpha=0.7, color=MECHAPRES_COLORS["error"], label='Investment Period',
+                         interpolate=True)
+        ax1.plot(years, cum_high, linewidth=2.5, color=MECHAPRES_COLORS["primary"],
+                marker='o', markersize=6, label='Cumulative Cash Flow')
+        ax1.axhline(y=0, color=MECHAPRES_COLORS["text"], linestyle='-', linewidth=2, alpha=0.8)
+        
+        if breakeven_high is not None:
+            ax1.plot(breakeven_high, cum_high[breakeven_high], 'g*',
+                    markersize=20, label=f'Break-even (Year {breakeven_high})', zorder=5)
+            ax1.annotate(f'Break-even\nYear {breakeven_high}',
+                        xy=(breakeven_high, cum_high[breakeven_high]),
+                        xytext=(breakeven_high + 1, cum_high[breakeven_high] * 1.2 if cum_high[breakeven_high] > 0 else cum_high[breakeven_high] * 0.8),
+                        fontsize=10, fontweight='bold', color=MECHAPRES_COLORS["success"],
+                        arrowprops=dict(arrowstyle='->', color=MECHAPRES_COLORS["success"], lw=2))
+        
+        ax1.set_xlabel('Year', fontsize=12, fontweight='bold')
+        ax1.set_ylabel('Cumulative Cash Flow (£)', fontsize=12, fontweight='bold')
+        ax1.set_title('High Case - 10-Year Projection', fontsize=14, fontweight='bold',
+                     color=MECHAPRES_COLORS["primary"], pad=15)
+        ax1.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+        ax1.legend(loc='best', framealpha=0.95, fontsize=9)
+        ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'£{x/1000:.0f}k'))
+        ax1.set_xlim(-0.5, 10.5)
+        
+        # Low Case
+        ax2.fill_between(years, cum_low, 0, where=[y >= 0 for y in cum_low],
+                         alpha=0.7, color=MECHAPRES_COLORS["success"], label='Positive Return',
+                         interpolate=True)
+        ax2.fill_between(years, cum_low, 0, where=[y < 0 for y in cum_low],
+                         alpha=0.7, color=MECHAPRES_COLORS["error"], label='Investment Period',
+                         interpolate=True)
+        ax2.plot(years, cum_low, linewidth=2.5, color=MECHAPRES_COLORS["secondary"],
+                marker='o', markersize=6, label='Cumulative Cash Flow')
+        ax2.axhline(y=0, color=MECHAPRES_COLORS["text"], linestyle='-', linewidth=2, alpha=0.8)
+        
+        if breakeven_low is not None:
+            ax2.plot(breakeven_low, cum_low[breakeven_low], 'g*',
+                    markersize=20, label=f'Break-even (Year {breakeven_low})', zorder=5)
+            ax2.annotate(f'Break-even\nYear {breakeven_low}',
+                        xy=(breakeven_low, cum_low[breakeven_low]),
+                        xytext=(breakeven_low + 1, cum_low[breakeven_low] * 1.2 if cum_low[breakeven_low] > 0 else cum_low[breakeven_low] * 0.8),
+                        fontsize=10, fontweight='bold', color=MECHAPRES_COLORS["success"],
+                        arrowprops=dict(arrowstyle='->', color=MECHAPRES_COLORS["success"], lw=2))
+        
+        ax2.set_xlabel('Year', fontsize=12, fontweight='bold')
+        ax2.set_ylabel('Cumulative Cash Flow (£)', fontsize=12, fontweight='bold')
+        ax2.set_title('Low Case - 10-Year Projection', fontsize=14, fontweight='bold',
+                     color=MECHAPRES_COLORS["secondary"], pad=15)
+        ax2.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+        ax2.legend(loc='best', framealpha=0.95, fontsize=9)
+        ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'£{x/1000:.0f}k'))
+        ax2.set_xlim(-0.5, 10.5)
+        
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+        
+        # Cash flow table
+        with st.expander("📋 View Detailed Cash Flow Table", expanded=False):
+            st.markdown("### Cash Flow Breakdown")
+            
+            col_table1, col_table2 = st.columns(2)
+            
+            with col_table1:
+                st.markdown("#### High Case")
+                df_high = pd.DataFrame({
+                    'Year': years,
+                    'Annual Cash Flow': [f"£{val:,.0f}" for val in cf_high],
+                    'Cumulative': [f"£{val:,.0f}" for val in cum_high]
+                })
+                st.dataframe(df_high, use_container_width=True, hide_index=True)
+                
+                if breakeven_high:
+                    st.success(f"✅ **Break-even in Year {breakeven_high}**")
+                    st.write(f"Total return after 10 years: **£{cum_high[-1]:,.0f}**")
+                else:
+                    st.warning("⚠️ Break-even not reached within 10 years")
+            
+            with col_table2:
+                st.markdown("#### Low Case")
+                df_low = pd.DataFrame({
+                    'Year': years,
+                    'Annual Cash Flow': [f"£{val:,.0f}" for val in cf_low],
+                    'Cumulative': [f"£{val:,.0f}" for val in cum_low]
+                })
+                st.dataframe(df_low, use_container_width=True, hide_index=True)
+                
+                if breakeven_low:
+                    st.success(f"✅ **Break-even in Year {breakeven_low}**")
+                    st.write(f"Total return after 10 years: **£{cum_low[-1]:,.0f}**")
+                else:
+                    st.warning("⚠️ Break-even not reached within 10 years")
+        
+        # Key insights
+        st.markdown("### 💡 Key Financial Insights")
+        insight_col1, insight_col2, insight_col3 = st.columns(3)
+        
+        with insight_col1:
+            st.metric(
+                "High Case - Net Position (Year 10)",
+                f"£{cum_high[-1]:,.0f}",
+                delta=f"£{cum_high[-1] + capex_high:,.0f} profit" if cum_high[-1] > 0 else None
+            )
+        
+        with insight_col2:
+            st.metric(
+                "Low Case - Net Position (Year 10)",
+                f"£{cum_low[-1]:,.0f}",
+                delta=f"£{cum_low[-1] + capex_low:,.0f} profit" if cum_low[-1] > 0 else None
+            )
+        
+        with insight_col3:
+            avg_roi = ((cum_high[-1] + capex_high) / capex_high * 100) if capex_high > 0 else 0
+            st.metric(
+                "Average ROI (High Case)",
+                f"{avg_roi:.1f}%",
+                help="Return on Investment over 10 years"
+            )
+
+        # Store results
+        st.session_state._final_results = {
+            "savings_high": savings_high,
+            "savings_low": savings_low,
+            "payback_high": payback_high,
+            "payback_low": payback_low,
+            "irr_high": irr_high,
+            "irr_low": irr_low,
+            "co2_savings": co2_savings,
+            "cost_current": cost_current,
+            "cost_mechapres": cost_mechapres,
+            "co2_current": co2_current,
+            "co2_mechapres": co2_mechapres,
+            "capex_high": capex_high,
+            "capex_low": capex_low,
+            "cash_flow_high": cf_high,
+            "cash_flow_low": cf_low,
+            "cumulative_high": cum_high,
+            "cumulative_low": cum_low,
+            "breakeven_high": breakeven_high,
+            "breakeven_low": breakeven_low,
         }
-        st.session_state._perf = perf
-        st.session_state._econ = {
-            "operating_hours":operating_hours,
-            "yearly_cost":yearly_cost,
-            "fuel_price":fuel_price,
-            "electricity_price":electricity_price,
-            "boiler_eff":boiler_eff,
-            "emission_factor_fuel_kWh": emission_factor_fuel_kWh,
-            "emission_factor_fuel_MWh": emission_factor_fuel_MWh,
-            "emission_factor_elec":emission_factor_elec,
-            "Q_steam_MWh":Q_steam_MWh,
-            "E_current_MWh":E_current_MWh,
-            "E_hp_electric_MWh":E_hp_electric_MWh,
-            "cost_current":cost_current,
-            "cost_mechapres":cost_mechapres,
-            "annual_savings_high":savings_high,
-            "annual_savings_low":savings_low,
-            "co2_current":co2_current,
-            "co2_mechapres":co2_mechapres,
-            "co2_savings":co2_savings,
-            "hp_size_low_kw":hp_size_low_kw,
-            "hp_size_high_kw":hp_size_high_kw,
-            "hr_size_low_kw":hr_size_low_kw,
-            "hr_size_high_kw":hr_size_high_kw,
-            "capex_low":capex_low,
-            "capex_high":capex_high,
-            "payback_low":payback_low,
-            "payback_high":payback_high,
-            "irr_low":irr_low,
-            "irr_high":irr_high,
-            "annual_band": annual_band,
-            "heat_supply_tech": st.session_state.get("heat_supply_tech","Fossil fuel boiler"),
-            "fuel_type": fuel_type
-        }
 
-# ===== Tab 3: Results =====
-with tabs[3]:
-    st.title("Results — Your Estimate")
-    perf = st.session_state.get("_perf")
-    perf_inputs = st.session_state.get("_perf_inputs", {})
-    econ = st.session_state.get("_econ", {})
+    except Exception as e:
+        st.error(f"❌ Error in calculations: {str(e)}")
+        st.write("Please review your inputs in previous steps.")
+        with st.expander("Debug Information"):
+            st.write(f"Error details: {type(e).__name__}: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
 
-    if not (perf and perf_inputs and econ):
-        st.warning("Complete Steps **1–2** to see results here.")
+    navigation_buttons()
+
+elif current_page == "Results":
+    st.title("Your Heat Pump Estimate")
+    
+    results = st.session_state.get("_final_results", {})
+    
+    if not results:
+        st.warning("Please complete all previous steps to see your results.")
+        if st.button("← Go to Start"):
+            st.session_state.current_page = 0
+            st.rerun()
+        st.stop()
+
+    # Main metrics
+    c1, c2 = st.columns(2)
+    c1.metric("Annual savings (high case)", f"£{results.get('savings_high', 0):,.0f}")
+    
+    # Format payback period consistently
+    payback_high = results.get('payback_high', 0)
+    if math.isfinite(payback_high) and payback_high <= 10:
+        payback_display = f"{payback_high:.1f} years"
     else:
-        c = st.columns(3)
-        c[0].metric("Estimated COP", f"{perf['COP_real']:.2f}")
-        c[1].metric("Annual savings (high case)", f"£{econ['annual_savings_high']:,.0f}")
-        c[2].metric("Simple payback (high case)", f"{econ['payback_high']:.1f} years" if math.isfinite(econ['payback_high']) else "n/a")
+        payback_display = ">10 years"
+    c2.metric("Simple payback (high case)", payback_display)
 
-        with st.expander("Low vs high case comparison", expanded=False):
-            st.write(f"**Low case** — savings £{econ['annual_savings_low']:,.0f}/year, "
-                     f"payback {econ['payback_low']:.1f} years, IRR {econ['irr_low']:.0f}%")
-            st.write(f"**High case** — savings £{econ['annual_savings_high']:,.0f}/year, "
-                     f"payback {econ['payback_high']:.1f} years, IRR {econ['irr_high']:.0f}%")
+    with st.expander("Low vs high case comparison", expanded=False):
+        payback_low = results.get('payback_low', 0)
+        payback_low_str = f"{payback_low:.1f} years" if (math.isfinite(payback_low) and payback_low <= 10) else ">10 years"
+        payback_high_str = f"{payback_high:.1f} years" if (math.isfinite(payback_high) and payback_high <= 10) else ">10 years"
+        
+        st.write(f"**Low case** — savings £{results.get('savings_low', 0):,.0f}/year, "
+                 f"payback {payback_low_str}, IRR {results.get('irr_low', 0):.0f}%")
+        st.write(f"**High case** — savings £{results.get('savings_high', 0):,.0f}/year, "
+                 f"payback {payback_high_str}, IRR {results.get('irr_high', 0):.0f}%")
 
-        st.header("📇 Contact Details")
-        if st.session_state.show_contact:
-            with st.form("contact_form"):
-                colA, colB = st.columns(2)
-                name = colA.text_input("Full Name")
-                company = colB.text_input("Company")
-                email = colA.text_input("Work Email")
-                phone = colB.text_input("Phone (optional)")
-                consent = st.checkbox("I agree to be contacted by Mechapres regarding this estimate.")
-                submitted = st.form_submit_button("Save Contact Info")
-                if submitted:
-                    if not (name and email and consent):
-                        st.warning("Please provide your name, email, and consent.")
-                    else:
-                        st.success("Contact details saved for PDF/email.")
-                        st.session_state.contact_name = name
-                        st.session_state.contact_company = company
-                        st.session_state.contact_email = email
-                        st.session_state.contact_phone = phone
-                        st.session_state.contact_consent = consent
-                        st.session_state.show_contact = False
-        else:
-            if st.button("Open Contact Form", key="cta_inline"):
-                st.session_state.show_contact = True
-            name = st.session_state.get("contact_name","")
-            company = st.session_state.get("contact_company","")
-            email = st.session_state.get("contact_email","")
-            phone = st.session_state.get("contact_phone","")
-            consent = st.session_state.get("contact_consent",False)
+    # Environmental impact
+    st.subheader("🌍 Environmental Impact")
+    st.metric("CO₂ Reduction", f"{results.get('co2_savings', 0):,.0f} tonnes/year")
 
-        gate = st.session_state.get("_gate", {"notes":[]})
+
+
+
+
+    # Process Model - Simple Working Version
+    st.markdown("---")
+    st.subheader("📊 Process Model")
+    
+    # Get temperature values
+    process_temp = st.session_state.process_temp
+    supply_temp = st.session_state.T_out2
+    return_temp = process_temp - 15  # Estimated return temperature
+    
+    # Waste Heat (top center)
+    st.markdown("<br>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown(f"""
+        <div style='text-align: center; padding: 1rem; background: #fff3e0; 
+                    border: 3px solid #ff9933; border-radius: 12px;'>
+            <div style='font-size: 2.5rem; color: #ff9933;'>↑</div>
+            <strong style='color: #1a1a1a; font-size: 1.05rem;'>Process Exhausts</strong><br/>
+            
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Main row: Supply arrow + Process box + Return arrow
+    col_left, col_center, col_right = st.columns([1.5, 2, 1.5])
+    
+    # Left: Heat Supply
+    with col_left:
+        st.markdown(f"""
+        <div style='text-align: center; padding: 1rem;'>
+            <strong style='color: #1a1a1a; font-size: 0.95rem; display: block;'>Heat Supply</strong>
+            <strong style='color: #1a1a1a; font-size: 0.95rem; display: block;'>Temperature to</strong>
+            <strong style='color: #1a1a1a; font-size: 0.95rem; display: block; margin-bottom: 0.5rem;'>the process</strong>
+            <strong style='color: #0066cc; font-size: 1.75rem; display: block; margin-bottom: 0.5rem;'>{supply_temp:.0f}°C</strong>
+            <div style='color: #cc3333; font-size: 3rem;'>→</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Center: Process box
+    with col_center:
+        st.markdown(f"""
+        <div style='text-align: center; padding: 2.5rem 2rem; 
+                    background: white; border: 4px solid #0066cc; 
+                    border-radius: 12px;'>
+            <strong style='color: #0066cc; font-size: 1.15rem; display: block; margin-bottom: 1rem;'>Process Temperature</strong>
+            <strong style='color: #0066cc; font-size: 2.75rem; display: block; margin: 0.5rem 0;'>{process_temp:.0f}°C</strong>
+            
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Right: Heat Return (showing on left side visually with arrow pointing left)
+    with col_right:
+        st.markdown(f"""
+        <div style='text-align: center; padding: 1rem;'>
+            <div style='color: #cc3333; font-size: 3rem; margin-bottom: 0.5rem;'>←</div>
+            <strong style='color: #1a1a1a; font-size: 0.95rem; display: block;'>Heat Return</strong>
+            <strong style='color: #1a1a1a; font-size: 0.95rem; display: block;'>Temperature</strong>
+            <strong style='color: #1a1a1a; font-size: 0.95rem; display: block; margin-bottom: 0.5rem;'>from the process</strong>
+            <strong style='color: #0066cc; font-size: 1.75rem; display: block;'>{return_temp:.0f}°C</strong>
+            
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    
+    # Information box
+    st.info(f"""
+**💡 Understanding Your Process:**
+
+• **Heat Supply Temperature ({supply_temp:.0f}°C):** Temperature at which heat is supplied to your process
+
+• **Process Temperature ({process_temp:.0f}°C):** Operating temperature of your industrial process
+
+• **Heat Return Temperature ({return_temp:.0f}°C):** Estimated return temperature after heat transfer (calculated as process temp - 15°C)
+
+• **Process Exhausts (waste heat):** Excess heat from your process that can be recovered by heat pumps
+    """)
+
+    # Contact form
+    st.header("📇 Get Your Detailed Report")
+    
+    if st.session_state.show_contact:
+        with st.form("contact_form"):
+            colA, colB = st.columns(2)
+            name = colA.text_input("Full Name")
+            company = colB.text_input("Company")
+            email = colA.text_input("Work Email")
+            phone = colB.text_input("Phone (optional)")
+            consent = st.checkbox("I agree to be contacted by Mechapres regarding this estimate.")
+            submitted = st.form_submit_button("Save Contact Info")
+            
+            if submitted:
+                if not (name and email and consent):
+                    st.warning("Please provide your name, email, and consent.")
+                else:
+                    st.success("Contact details saved!")
+                    st.session_state.contact_name = name
+                    st.session_state.contact_company = company
+                    st.session_state.contact_email = email
+                    st.session_state.contact_phone = phone
+                    st.session_state.contact_consent = consent
+                    st.session_state.show_contact = False
+                    st.rerun()
+    else:
+        if st.button("📋 Enter Contact Details", key="show_contact_btn", use_container_width=True):
+            st.session_state.show_contact = True
+            st.rerun()
+
+    # PDF generation
+    name = st.session_state.get("contact_name", "")
+    company = st.session_state.get("contact_company", "")
+    email = st.session_state.get("contact_email", "")
+    phone = st.session_state.get("contact_phone", "")
+    consent = st.session_state.get("contact_consent", False)
+
+    if name and email:
+        gate = st.session_state.get("_gate", {"notes": []})
         inputs_for_pdf = {
-            "Process_temperature_C":      st.session_state.get("process_temp"),
-            "Energy_vector":              st.session_state.get("energy_vector"),
-            "Heat_supply_technology":     econ.get("heat_supply_tech"),
-            "Fuel_type":                  econ.get("fuel_type"),
-            "Days_production_per_year":   st.session_state.get("prod_days"),
-            "Hours_production_per_day":   st.session_state.get("prod_hours_per_day"),
-            "T_in1":                      perf_inputs.get("T_in1"),
-            "T_out2":                     perf_inputs.get("T_out2"),
-            "T_in2":                      perf_inputs.get("T_in2"),
-            "P_out2":                     perf_inputs.get("P_out2"),
-            "Q_process_kW":               perf_inputs.get("Q_process"),
-            "T_app_condenser_K":          perf_inputs.get("T_app_cond"),
-            "T_app_evaporator_K":         perf_inputs.get("T_app_evap"),
-            "T_ev_minimum_C":             perf_inputs.get("T_ev_minimum"),
-            "lorentz_eff":                perf_inputs.get("lorentz_eff"),
-            "Waste_heat_min_%":           perf_inputs.get("waste_min_pct"),
-            "Waste_heat_max_%":           perf_inputs.get("waste_max_pct"),
-            "Operating_hours":            econ.get("operating_hours"),
-            "Annual_energy_cost_£/yr":    econ.get("yearly_cost"),
-            "Fuel_price_£/MWh":           econ.get("fuel_price"),
-            "Electricity_price_£/MWh":    econ.get("electricity_price"),
-            "Boiler_efficiency":          econ.get("boiler_eff"),
-            "Annual_energy_band":         econ.get("annual_band"),
-            "EF_fuel_kgCO2_per_kWh":      econ.get("emission_factor_fuel_kWh"),
-            "EF_elec_kgCO2_per_MWh":      econ.get("emission_factor_elec"),
-            "contact_name":               name,
-            "contact_company":            company,
-            "contact_email":              email,
-            "contact_phone":              phone,
-            "contact_consent":            consent
+            "Process_temperature_C": st.session_state.process_temp,
+            "Energy_vector": st.session_state.energy_vector,
+            "Heat_supply_technology": st.session_state.heat_supply_tech,
+            "Fuel_type": st.session_state.fuel_type,
+            "contact_name": name,
+            "contact_company": company,
+            "contact_email": email,
+            "contact_phone": phone,
+            "contact_consent": consent
         }
-        messages = list(gate.get("notes", [])) + ["Technical performance model applied in the background to estimate COP and savings."]
 
         results_for_pdf = {
-            "capacity_MWth": perf["capacity_MWth"],
-            "cop":           perf["COP_real"],
-            "Q_steam_MWh":   econ["Q_steam_MWh"],
-            "cost_current":  econ["cost_current"],
-            "cost_mechapres":econ["cost_mechapres"],
-            "savings_high":  econ["annual_savings_high"],
-            "co2_current":   econ["co2_current"],
-            "co2_mechapres": econ["co2_mechapres"],
-            "co2_savings":   econ["co2_savings"],
-            "payback_high":  econ["payback_high"],
-            "irr_high":      econ["irr_high"],
-            "messages":      messages,
+            "savings_high": results.get("savings_high"),
+            "co2_savings": results.get("co2_savings"),
+            "payback_high": results.get("payback_high"),
+            "cost_current": results.get("cost_current"),
+            "cost_mechapres": results.get("cost_mechapres"),
+            "co2_current": results.get("co2_current"),
+            "co2_mechapres": results.get("co2_mechapres"),
+            "messages": gate.get("notes", [])
         }
 
-        st.markdown("### 📄 Download or Send Your Report")
-        pdf_buffer = generate_report(inputs_for_pdf, results_for_pdf, LOGO_PATH, MECHAPRES_COLORS)
+        pdf_buffer = generate_report(inputs_for_pdf, results_for_pdf)
         pdf_bytes = pdf_buffer.getvalue()
         fname = f"Mechapres_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-        st.download_button("📥 Download PDF Report", data=pdf_bytes, file_name=fname, mime="application/pdf")
 
-        col_send1, col_send2 = st.columns(2)
-        if col_send1.button("📧 Email this report to me"):
-            if email and consent:
-                try:
-                    send_email_with_pdf(
-                        "Your Mechapres Heat Pump Estimate",
-                        f"Hi {name or ''},\n\nAttached is your Mechapres industrial heat pump estimate.\n\nBest regards,\nMechapres",
-                        email, pdf_bytes, fname
-                    )
-                    st.success("Report emailed to your address.")
-                except Exception as e:
-                    st.error(f"Email failed: {e}")
-            else:
-                st.warning("Please provide your email and consent in Contact Details (above).")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.download_button("📥 Download PDF Report", data=pdf_bytes, file_name=fname, mime="application/pdf")
+            
+        with col2:
+            if st.button("📧 Email Report to Me"):
+                if consent:
+                    try:
+                        send_email_with_pdf(
+                            "Your Mechapres Heat Pump Estimate",
+                            f"Hi {name},\n\nAttached is your Mechapres industrial heat pump estimate.\n\nBest regards,\nMechapres",
+                            email, pdf_bytes, fname
+                        )
+                        st.success("Report emailed successfully!")
+                    except Exception as e:
+                        st.error(f"Email failed: {e}")
+                else:
+                    st.warning("Please provide consent to email the report.")
 
-        if col_send2.button("📨 Send to Mechapres sales"):
-            try:
-                sales_to = st.secrets.get("SALES_TO", None)
-                if not sales_to:
-                    raise RuntimeError("Missing SALES_TO in secrets.")
-                body = ("New calculator lead.\n\n"
-                        f"Name: {name}\nCompany: {company}\nEmail: {email}\nPhone: {phone}\nConsent: {consent}\n\n"
-                        "Estimate PDF attached.")
-                send_email_with_pdf("New Mechapres Calculator Lead", body, sales_to, pdf_bytes, fname)
-                st.success("Report sent to Mechapres sales.")
-            except Exception as e:
-                st.error(f"Email to sales failed: {e}")
-
-# ===== Global reset button =====
-st.divider()
-if st.button("🔁 Reset all", use_container_width=True):
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    st.rerun()
-
+    # Restart
+    st.divider()
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🔄 Start New Estimate", use_container_width=True):
+            # Clear all session state
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
