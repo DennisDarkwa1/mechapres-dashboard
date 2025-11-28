@@ -22,6 +22,7 @@ MECHAPRES_COLORS = {
     "text": "#1a1a1a",         # Dark text
     "text_light": "#4d4d4d",   # Grey text
     "white": "#ffffff",        # White
+    "background": "#f5f5f5",   # Light gray background
     "border": "#cce5ff",       # Light blue border
     "success": "#00aa66",      # Green
     "warning": "#ff9933",      # Orange
@@ -169,34 +170,47 @@ def calculate_operating_hours():
 # ==================== UI COMPONENTS ====================
 
 def apply_brand_theme():
-    """Apply simple blue professional theme"""
+    """Apply light gray professional theme with identical structure on all devices"""
     css = """
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
       
-      /* Blue color theme */
+      /* Light gray color theme */
       :root {
         --primary-blue: #0066cc;
         --deep-blue: #004d99;
         --sky-blue: #3399ff;
-        --light-blue: #e6f2ff;
-        --border-blue: #cce5ff;
+        --light-gray: #e8e8e8;
+        --medium-gray: #d0d0d0;
+        --border-gray: #c0c0c0;
         --text-dark: #1a1a1a;
         --text-grey: #4d4d4d;
         --white: #ffffff;
+        --background-gray: #f5f5f5;
       }
 
-      /* Base styles */
-      html, body, .stApp {
+      /* Base styles - Light gray background */
+      html, body, [data-testid="stAppViewContainer"], .stApp {
         font-family: 'Inter', sans-serif;
         color: var(--text-dark);
-        background: linear-gradient(135deg, #ffffff 0%, #f0f7ff 100%);
+        background-color: var(--background-gray) !important;
+      }
+
+      /* Main background */
+      [data-testid="stAppViewContainer"] > .main {
+        background-color: var(--background-gray) !important;
+      }
+
+      /* Sidebar */
+      [data-testid="stSidebar"] {
+        background-color: var(--white) !important;
       }
 
       /* Container */
       .main .block-container {
         max-width: 1200px;
         padding: 2.5rem 1.5rem;
+        background-color: var(--background-gray) !important;
       }
 
       /* Headers with blue color */
@@ -228,36 +242,57 @@ def apply_brand_theme():
         font-size: 0.95rem !important;
       }
 
-      /* Input fields */
+      /* Input fields - LIGHT GRAY background */
       .stSelectbox select, 
       .stNumberInput input, 
-      .stTextInput input {
-        border: 2px solid var(--border-blue) !important;
+      .stTextInput input,
+      .stTextArea textarea {
+        background-color: var(--light-gray) !important;
+        border: 2px solid var(--border-gray) !important;
         border-radius: 10px !important;
         padding: 14px 18px !important;
         transition: all 0.2s ease !important;
+        color: var(--text-dark) !important;
       }
 
       .stSelectbox select:focus, 
       .stNumberInput input:focus, 
-      .stTextInput input:focus {
+      .stTextInput input:focus,
+      .stTextArea textarea:focus {
         border-color: var(--primary-blue) !important;
         box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1) !important;
+        background-color: var(--white) !important;
       }
 
-      /* Radio buttons */
+      /* Select dropdown options - LIGHT GRAY */
+      .stSelectbox select option {
+        background-color: var(--light-gray) !important;
+        color: var(--text-dark) !important;
+        padding: 10px !important;
+      }
+
+      .stSelectbox select option:hover {
+        background-color: var(--medium-gray) !important;
+      }
+
+      /* Radio buttons - LIGHT GRAY background */
       .stRadio > div {
-        background: white;
-        border: 2px solid var(--border-blue);
-        border-radius: 12px;
-        padding: 1rem;
-        margin: 0.5rem 0;
-        transition: all 0.2s ease;
+        background-color: var(--light-gray) !important;
+        border: 2px solid var(--border-gray) !important;
+        border-radius: 12px !important;
+        padding: 1rem !important;
+        margin: 0.5rem 0 !important;
+        transition: all 0.2s ease !important;
       }
 
       .stRadio > div:hover {
-        border-color: var(--primary-blue);
-        background: var(--light-blue);
+        border-color: var(--primary-blue) !important;
+        background-color: var(--medium-gray) !important;
+      }
+
+      .stRadio > div[data-checked="true"] {
+        background-color: var(--white) !important;
+        border-color: var(--primary-blue) !important;
       }
 
       /* Buttons */
@@ -278,18 +313,18 @@ def apply_brand_theme():
         box-shadow: 0 8px 25px rgba(0, 102, 204, 0.3) !important;
       }
 
-      /* Metrics */
+      /* Metrics - White background to stand out */
       .stMetric {
-        background: white;
-        border: 2px solid var(--border-blue);
-        border-radius: 12px;
-        padding: 1.5rem;
-        box-shadow: 0 2px 8px rgba(0, 102, 204, 0.08);
+        background-color: var(--white) !important;
+        border: 2px solid var(--border-gray) !important;
+        border-radius: 12px !important;
+        padding: 1.5rem !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05) !important;
       }
 
       .stMetric:hover {
         transform: translateY(-2px);
-        box-shadow: 0 4px 16px rgba(0, 102, 204, 0.12);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1) !important;
       }
 
       .stMetric label {
@@ -305,22 +340,29 @@ def apply_brand_theme():
 
       /* Alerts */
       .stSuccess {
-        background: rgba(0, 170, 102, 0.1) !important;
+        background-color: rgba(0, 170, 102, 0.1) !important;
         border-left: 4px solid #00aa66 !important;
         border-radius: 8px !important;
         padding: 1rem !important;
       }
 
       .stError {
-        background: rgba(204, 51, 51, 0.1) !important;
+        background-color: rgba(204, 51, 51, 0.1) !important;
         border-left: 4px solid #cc3333 !important;
         border-radius: 8px !important;
         padding: 1rem !important;
       }
 
       .stInfo {
-        background: var(--light-blue) !important;
+        background-color: var(--white) !important;
         border-left: 4px solid var(--primary-blue) !important;
+        border-radius: 8px !important;
+        padding: 1rem !important;
+      }
+
+      .stWarning {
+        background-color: rgba(255, 153, 51, 0.1) !important;
+        border-left: 4px solid #ff9933 !important;
         border-radius: 8px !important;
         padding: 1rem !important;
       }
@@ -329,7 +371,7 @@ def apply_brand_theme():
       hr {
         margin: 2rem 0 !important;
         border: none !important;
-        border-top: 2px solid var(--border-blue) !important;
+        border-top: 2px solid var(--border-gray) !important;
       }
 
       /* Links */
@@ -344,14 +386,236 @@ def apply_brand_theme():
         text-decoration: underline !important;
       }
 
-      /* Responsive */
-      @media (max-width: 768px) {
+      /* Form containers */
+      .stForm {
+        background-color: var(--white) !important;
+        border: 1px solid var(--border-gray) !important;
+        border-radius: 12px !important;
+        padding: 1.5rem !important;
+      }
+
+      /* ========================================================== */
+      /* CRITICAL: FORCE SAME STRUCTURE ON ALL DEVICES             */
+      /* Columns NEVER stack - they always stay side-by-side       */
+      /* ========================================================== */
+      
+      /* Force horizontal layout - NEVER vertical */
+      [data-testid="stHorizontalBlock"] {
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        gap: 0.5rem !important;
+      }
+
+      /* Force columns to stay side-by-side */
+      [data-testid="column"] {
+        display: flex !important;
+        flex-direction: column !important;
+        flex: 1 1 0 !important;
+        min-width: 0 !important;
+        width: auto !important;
+        max-width: none !important;
+      }
+
+      /* Prevent any column from taking full width */
+      [data-testid="column"] > div {
+        width: 100% !important;
+      }
+
+      /* Force equal column distribution */
+      [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+        flex-grow: 1 !important;
+        flex-shrink: 1 !important;
+        flex-basis: 0 !important;
+      }
+
+      /* ========================================================== */
+      /* RESPONSIVE DESIGN - SAME STRUCTURE, JUST SCALED            */
+      /* Only text size and spacing change - layout stays same     */
+      /* ========================================================== */
+      
+      /* Large Desktop (1920px+) */
+      @media (min-width: 1920px) {
         .main .block-container {
-          padding: 1.5rem 1rem;
+          max-width: 1400px;
         }
+      }
+
+      /* Desktop & Laptop (1200px - 1919px) - DEFAULT */
+      @media (min-width: 1200px) and (max-width: 1919px) {
+        .main .block-container {
+          max-width: 1200px;
+        }
+      }
+
+      /* Laptop & Tablet Landscape (992px - 1199px) */
+      @media (min-width: 992px) and (max-width: 1199px) {
+        .main .block-container {
+          max-width: 100%;
+          padding: 2rem 1.5rem;
+        }
+        
+        /* Scale text only - structure stays same */
+        h1 { font-size: 2.25rem !important; }
+        h2 { font-size: 1.875rem !important; }
+        h3 { font-size: 1.375rem !important; }
+        
+        /* Columns still side-by-side with smaller gap */
+        [data-testid="stHorizontalBlock"] {
+          gap: 0.4rem !important;
+        }
+      }
+
+      /* Tablet Portrait (768px - 991px) */
+      @media (min-width: 768px) and (max-width: 991px) {
+        .main .block-container {
+          max-width: 100%;
+          padding: 1.75rem 1.25rem;
+        }
+        
+        /* Scale text - structure stays same */
         h1 { font-size: 2rem !important; }
         h2 { font-size: 1.75rem !important; }
         h3 { font-size: 1.25rem !important; }
+        
+        /* Columns still side-by-side */
+        [data-testid="stHorizontalBlock"] {
+          gap: 0.3rem !important;
+        }
+        
+        /* Scale metrics */
+        .stMetric {
+          padding: 1.25rem !important;
+        }
+        
+        .stMetric [data-testid="stMetricValue"] {
+          font-size: 1.75rem !important;
+        }
+      }
+
+      /* Mobile Landscape & Large Phone (576px - 767px) */
+      @media (min-width: 576px) and (max-width: 767px) {
+        .main .block-container {
+          padding: 1.5rem 1rem;
+        }
+        
+        /* Scale text - structure stays same */
+        h1 { font-size: 1.75rem !important; }
+        h2 { font-size: 1.5rem !important; }
+        h3 { font-size: 1.15rem !important; }
+        
+        /* Columns STILL side-by-side with minimal gap */
+        [data-testid="stHorizontalBlock"] {
+          gap: 0.25rem !important;
+        }
+        
+        /* Scale inputs */
+        .stSelectbox select, 
+        .stNumberInput input, 
+        .stTextInput input {
+          font-size: 0.9rem !important;
+          padding: 12px 14px !important;
+        }
+        
+        /* Scale labels */
+        label {
+          font-size: 0.85rem !important;
+        }
+        
+        /* Scale metrics */
+        .stMetric {
+          padding: 1rem !important;
+        }
+        
+        .stMetric [data-testid="stMetricValue"] {
+          font-size: 1.5rem !important;
+        }
+        
+        .stMetric label {
+          font-size: 0.8rem !important;
+        }
+        
+        /* Scale buttons */
+        .stButton > button {
+          font-size: 0.9rem !important;
+          padding: 12px 24px !important;
+        }
+      }
+
+      /* Mobile Portrait (up to 575px) - SMALLEST BUT SAME STRUCTURE */
+      @media (max-width: 575px) {
+        .main .block-container {
+          padding: 1rem 0.75rem;
+        }
+        
+        /* Scale text - structure stays same */
+        h1 { font-size: 1.5rem !important; }
+        h2 { font-size: 1.25rem !important; }
+        h3 { font-size: 1.1rem !important; }
+        
+        /* Columns STILL side-by-side with minimal gap */
+        [data-testid="stHorizontalBlock"] {
+          gap: 0.15rem !important;
+        }
+        
+        /* Scale inputs to fit */
+        .stSelectbox select, 
+        .stNumberInput input, 
+        .stTextInput input {
+          font-size: 0.8rem !important;
+          padding: 10px 12px !important;
+        }
+        
+        /* Scale labels */
+        label {
+          font-size: 0.8rem !important;
+        }
+        
+        /* Scale metrics */
+        .stMetric {
+          padding: 0.75rem !important;
+        }
+        
+        .stMetric [data-testid="stMetricValue"] {
+          font-size: 1.25rem !important;
+        }
+        
+        .stMetric label {
+          font-size: 0.75rem !important;
+        }
+        
+        /* Scale buttons */
+        .stButton > button {
+          font-size: 0.85rem !important;
+          padding: 10px 20px !important;
+          min-height: 42px !important;
+        }
+      }
+
+      /* Extra safety: Override any Streamlit mobile defaults */
+      @media (max-width: 640px) {
+        [data-testid="stHorizontalBlock"] {
+          flex-direction: row !important;
+          flex-wrap: nowrap !important;
+        }
+        
+        [data-testid="column"] {
+          flex: 1 1 0 !important;
+        }
+      }
+
+      /* ========================================================== */
+      /* HORIZONTAL SCROLLING (if needed on very small screens)     */
+      /* Prevents layout breaking - allows horizontal scroll        */
+      /* ========================================================== */
+      @media (max-width: 480px) {
+        .main .block-container {
+          overflow-x: auto !important;
+        }
+        
+        [data-testid="stHorizontalBlock"] {
+          min-width: fit-content !important;
+        }
       }
     </style>
     """
@@ -1741,71 +2005,89 @@ elif current_page == "Results":
 
 
 
-    # Process Model - Simple Working Version
+    # Process Model - Clean Version with TOP LEFT and BOTTOM LEFT arrows
     st.markdown("---")
     st.subheader("📊 Process Model")
     
-    # Get temperature values
+    # Get temperature values from customer inputs
     process_temp = st.session_state.process_temp
     supply_temp = st.session_state.T_out2
     return_temp = process_temp - 15  # Estimated return temperature
     
-    # Waste Heat (top center)
-    st.markdown("<br>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown(f"""
-        <div style='text-align: center; padding: 1rem; background: #fff3e0; 
-                    border: 3px solid #ff9933; border-radius: 12px;'>
-            <div style='font-size: 2.5rem; color: #ff9933;'>↑</div>
-            <strong style='color: #1a1a1a; font-size: 1.05rem;'>Process Exhausts</strong><br/>
-            
+    # Create white container box
+    st.markdown("""
+    <div style='background: white; padding: 3rem 2rem; border-radius: 12px; 
+                border: 2px solid #e0e0e0; margin: 2rem 0;'>
+    """, unsafe_allow_html=True)
+    
+    # TOP CENTER: Process Exhausts
+    col_top1, col_top2, col_top3 = st.columns([1, 2, 1])
+    with col_top2:
+        st.markdown("""
+        <div style='text-align: center; margin-bottom: 2rem;'>
+            <div style='font-size: 3rem; color: #ff9933; margin-bottom: 0.5rem;'>↑</div>
+            <strong style='color: #1a1a1a; font-size: 1.1rem;'>Process Exhausts</strong>
         </div>
         """, unsafe_allow_html=True)
     
-    st.markdown("<br>", unsafe_allow_html=True)
+    # Create main layout row
+    col_left, col_center, col_right = st.columns([2.5, 3, 2])
     
-    # Main row: Supply arrow + Process box + Return arrow
-    col_left, col_center, col_right = st.columns([1.5, 2, 1.5])
-    
-    # Left: Heat Supply
+    # LEFT COLUMN: Heat Supply (TOP) and Heat Return (BOTTOM) using flexbox
     with col_left:
-        st.markdown(f"""
-        <div style='text-align: center; padding: 1rem;'>
-            <strong style='color: #1a1a1a; font-size: 0.95rem; display: block;'>Heat Supply</strong>
-            <strong style='color: #1a1a1a; font-size: 0.95rem; display: block;'>Temperature to</strong>
-            <strong style='color: #1a1a1a; font-size: 0.95rem; display: block; margin-bottom: 0.5rem;'>the process</strong>
-            <strong style='color: #0066cc; font-size: 1.75rem; display: block; margin-bottom: 0.5rem;'>{supply_temp:.0f}°C</strong>
-            <div style='color: #cc3333; font-size: 3rem;'>→</div>
+        heat_supply_html = f"""
+        <div style='display: flex; flex-direction: column; justify-content: space-between; min-height: 450px;'>
+            <div style='text-align: left; padding: 1rem 0;'>
+                <div style='margin-bottom: 1rem;'>
+                    <strong style='color: #1a1a1a; font-size: 1rem; display: block;'>Heat Supply</strong>
+                    <strong style='color: #1a1a1a; font-size: 1rem; display: block;'>Temperature to</strong>
+                    <strong style='color: #1a1a1a; font-size: 1rem; display: block; margin-bottom: 0.75rem;'>the process</strong>
+                    <strong style='color: #0066cc; font-size: 1.5rem; display: block; margin-bottom: 1rem;'>{supply_temp:.0f}°C</strong>
+                </div>
+                <div style='text-align: right; padding-right: 1rem;'>
+                    <span style='color: #cc3333; font-size: 4rem; font-weight: bold; line-height: 1;'>→</span>
+                </div>
+            </div>
+            <div style='text-align: left; padding: 1rem 0;'>
+                <div style='text-align: right; padding-right: 1rem; margin-bottom: 1rem;'>
+                    <span style='color: #cc3333; font-size: 4rem; font-weight: bold; line-height: 1;'>←</span>
+                </div>
+                <div>
+                    <strong style='color: #1a1a1a; font-size: 1rem; display: block;'>Heat Return</strong>
+                    <strong style='color: #1a1a1a; font-size: 1rem; display: block;'>Temperature</strong>
+                    <strong style='color: #1a1a1a; font-size: 1rem; display: block; margin-bottom: 0.75rem;'>from the process</strong>
+                    <strong style='color: #0066cc; font-size: 1.5rem; display: block;'>{return_temp:.0f}°C</strong>
+                </div>
+            </div>
         </div>
-        """, unsafe_allow_html=True)
+        """
+        st.markdown(heat_supply_html, unsafe_allow_html=True)
     
-    # Center: Process box
+    # CENTER COLUMN: Process Temperature Box
     with col_center:
-        st.markdown(f"""
-        <div style='text-align: center; padding: 2.5rem 2rem; 
-                    background: white; border: 4px solid #0066cc; 
-                    border-radius: 12px;'>
-            <strong style='color: #0066cc; font-size: 1.15rem; display: block; margin-bottom: 1rem;'>Process Temperature</strong>
-            <strong style='color: #0066cc; font-size: 2.75rem; display: block; margin: 0.5rem 0;'>{process_temp:.0f}°C</strong>
-            
+        process_box_html = f"""
+        <div style='display: flex; align-items: center; justify-content: center; min-height: 450px;'>
+            <div style='background: white; 
+                        padding: 3rem 2.5rem; 
+                        border: 4px solid #0066cc; 
+                        border-radius: 12px;
+                        text-align: center;
+                        width: 100%;'>
+                <strong style='color: #0066cc; font-size: 1.3rem; display: block; margin-bottom: 1.5rem;'>Process Temperature</strong>
+                <strong style='color: #0066cc; font-size: 3.5rem; display: block;'>{process_temp:.0f}°C</strong>
+            </div>
         </div>
-        """, unsafe_allow_html=True)
+        """
+        st.markdown(process_box_html, unsafe_allow_html=True)
     
-    # Right: Heat Return (showing on left side visually with arrow pointing left)
+    # RIGHT COLUMN: Empty (for spacing)
     with col_right:
-        st.markdown(f"""
-        <div style='text-align: center; padding: 1rem;'>
-            <div style='color: #cc3333; font-size: 3rem; margin-bottom: 0.5rem;'>←</div>
-            <strong style='color: #1a1a1a; font-size: 0.95rem; display: block;'>Heat Return</strong>
-            <strong style='color: #1a1a1a; font-size: 0.95rem; display: block;'>Temperature</strong>
-            <strong style='color: #1a1a1a; font-size: 0.95rem; display: block; margin-bottom: 0.5rem;'>from the process</strong>
-            <strong style='color: #0066cc; font-size: 1.75rem; display: block;'>{return_temp:.0f}°C</strong>
-            
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("<div style='height: 450px;'></div>", unsafe_allow_html=True)
     
-    st.markdown("<br><br>", unsafe_allow_html=True)
+    # Close the white container box
+    st.markdown("</div>", unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
     
     # Information box
     st.info(f"""
@@ -1817,7 +2099,7 @@ elif current_page == "Results":
 
 • **Heat Return Temperature ({return_temp:.0f}°C):** Estimated return temperature after heat transfer (calculated as process temp - 15°C)
 
-• **Process Exhausts (waste heat):** Excess heat from your process that can be recovered by heat pumps
+• **Process Exhausts:** Excess heat from your process that can be recovered by heat pumps
     """)
 
     # Contact form
