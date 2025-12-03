@@ -1116,9 +1116,207 @@ elif current_page == "Basic Site Parameters":
     )
 
     operating_hours_est = calculate_operating_hours()
-    # st.info(f"**Operating hours per year:** {operating_hours_est:.0f} h/year")  # Hidden per user request
+        # st.info(f"**Operating hours per year:** {operating_hours_est:.0f} h/year")  # Hidden per user request
+
+    # Process Model - Matching uploaded diagram exactly
+    st.markdown("---")
+    st.subheader("📊 Process Model & Heat Pump Schematic")
+    
+    # Get temperature values from customer inputs
+    process_temp = st.session_state.process_temp
+    supply_temp = st.session_state.T_out2
+    return_temp = process_temp - 15
+    waste_temp = st.session_state.get('w_temp', process_temp)
+    
+    # Calculate heat pump temperatures
+    t_ev = waste_temp - 5  # Evaporator temperature
+    t_c = supply_temp + 5  # Condenser temperature
+    t_out1 = waste_temp - 10  # Waste heat outlet
+    t_in1 = waste_temp  # Waste heat inlet
+    
+    # DIAGRAM 1: PROCESS HEAT FLOW (Compact professional version)
+    st.markdown("#### Process Heat Flow")
+    
+    # Single compact row with all elements close together
+    col1, col2, col3 = st.columns([1, 1.2, 1])
+    
+    with col1:
+        st.markdown(f"""
+        <div style='text-align: center; padding: 0.3rem;'>
+            <div style='color: #1a1a1a; font-size: 0.85rem; margin-bottom: 0.3rem;'>
+                <strong>Heat Supply<br>Temperature to<br>the process</strong>
+            </div>
+            <div style='color: #0066cc; font-size: 1.4rem; font-weight: bold; margin: 0.3rem 0;'>
+                {supply_temp:.0f}°C
+            </div>
+            <div style='color: #cc3333; font-size: 3rem; font-weight: bold; margin-top: 0.3rem;'>→</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div style='text-align: center; padding: 0.3rem;'>
+            <div style='color: #ff9933; font-size: 2.5rem; margin-bottom: 0.2rem;'>↑</div>
+            <div style='color: #1a1a1a; font-size: 0.85rem; margin-bottom: 0.5rem;'>
+                <strong>Process Exhausts</strong><br>
+                <span style='color: #666; font-size: 0.8rem;'>(waste heat)</span>
+            </div>
+            <div style='border: 4px solid #0066cc; border-radius: 8px; padding: 1.5rem 1rem; background: white;'>
+                <strong style='color: #0066cc; font-size: 1.05rem;'>Process Temperature</strong><br>
+                <strong style='color: #0066cc; font-size: 2.2rem;'>{process_temp:.0f}°C</strong>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(f"""
+        <div style='text-align: center; padding: 0.3rem;'>
+            <div style='color: #1a1a1a; font-size: 0.85rem; margin-bottom: 0.3rem;'>
+                <strong>Heat Return<br>Temperature<br>from the process</strong>
+            </div>
+            <div style='color: #0066cc; font-size: 1.4rem; font-weight: bold; margin: 0.3rem 0;'>
+                {return_temp:.0f}°C
+            </div>
+            <div style='color: #cc3333; font-size: 3rem; font-weight: bold; margin-top: 0.3rem;'>←</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Process metrics
+    col_p1, col_p2, col_p3 = st.columns(3)
+    with col_p1:
+        st.metric("Heat Supply", f"{supply_temp:.0f}°C", help="Temperature at which heat is supplied to your process")
+    with col_p2:
+        st.metric("Process", f"{process_temp:.0f}°C", help="Operating temperature of your industrial process")
+    with col_p3:
+        st.metric("Heat Return", f"{return_temp:.0f}°C", help="Temperature of heat returning from process")
+    
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    
+    # DIAGRAM 2: HEAT PUMP SYSTEM (Compact professional version)
+    st.markdown("#### Heat Pump System")
+    
+    # Create compact layout with everything close to the heat pump box
+    col_left, col_center, col_right = st.columns([1, 1.8, 1])
+    
+    with col_left:
+        st.markdown(f"""
+        <div style='padding: 0.5rem; text-align: center;'>
+            <div style='color: #ff9933; font-size: 0.85rem; margin-bottom: 0.5rem;'>
+                <strong>Waste Heat</strong><br>
+                Waste Inlet<br><strong>{t_in1:.0f}°C</strong>
+            </div>
+            <div style='color: #ff9933; font-size: 2.5rem; margin: 0.5rem 0;'>→</div>
+            <div style='color: #ff9933; font-size: 0.85rem; margin: 0.5rem 0;'>
+                <strong>Heat<br>Absorbed</strong>
+            </div>
+            <div style='color: #ff9933; font-size: 2.5rem; margin: 0.5rem 0;'>→</div>
+            <div style='color: #ff9933; font-size: 0.85rem; margin-top: 0.5rem;'>
+                Waste Outlet<br><strong>{t_out1:.0f}°C</strong>
+            </div>
+            <div style='color: #ff9933; font-size: 2.5rem; margin-top: 0.5rem;'>←</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_center:
+        st.markdown(f"""
+        <div style='border: 3px solid #0066cc; border-radius: 8px; padding: 1.5rem 1rem; background: white;'>
+            <div style='text-align: center; margin-bottom: 1.5rem;'>
+                <span style='color: #666; font-size: 1.3rem;'>⋈</span><br>
+                <span style='color: #666; font-size: 0.75rem;'>Expansion Valve</span>
+            </div>
+            <table style='width: 100%; margin: 1.5rem 0;'>
+                <tr>
+                    <td style='text-align: center; width: 50%;'>
+                        <span style='color: #0066cc; font-size: 1.8rem;'>◇</span><br>
+                        <span style='color: #666; font-size: 0.75rem;'>Evaporator</span><br>
+                        <strong style='color: #0066cc; font-size: 0.95rem;'>{t_ev:.0f}°C</strong>
+                    </td>
+                    <td style='text-align: center; width: 50%;'>
+                        <span style='color: #cc3333; font-size: 1.8rem;'>≋</span><br>
+                        <span style='color: #666; font-size: 0.75rem;'>Condenser</span><br>
+                        <strong style='color: #cc3333; font-size: 0.95rem;'>{t_c:.0f}°C</strong>
+                    </td>
+                </tr>
+            </table>
+            <div style='text-align: center; margin-top: 1.5rem;'>
+                <span style='color: #666; font-size: 1.8rem;'>⊚</span><br>
+                <span style='color: #666; font-size: 0.75rem;'>Compressor</span>
+            </div>
+        </div>
+        <div style='text-align: center; margin-top: 0.5rem;'>
+            <div style='color: #00cc66; font-size: 2rem;'>↑</div>
+            <strong style='color: #00cc66; font-size: 0.85rem;'>Electrical Energy</strong>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_right:
+        st.markdown(f"""
+        <div style='padding: 0.5rem; text-align: center;'>
+            <div style='color: #cc3333; font-size: 0.85rem; margin-bottom: 0.5rem;'>
+                Process Return<br><strong>{return_temp:.0f}°C</strong>
+            </div>
+            <div style='color: #cc3333; font-size: 2.5rem; margin: 0.5rem 0;'>←</div>
+            <div style='color: #cc3333; font-size: 0.85rem; margin: 0.5rem 0;'>
+                <strong>Heat<br>Delivered</strong>
+            </div>
+            <div style='color: #cc3333; font-size: 2.5rem; margin: 0.5rem 0;'>→</div>
+            <div style='color: #cc3333; font-size: 0.85rem; margin: 0.5rem 0;'>
+                Process Supply<br><strong>{supply_temp:.0f}°C</strong>
+            </div>
+            <div style='color: #cc3333; font-size: 2.5rem; margin-top: 0.5rem;'>→</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Heat pump component metrics
+    col_h1, col_h2, col_h3, col_h4 = st.columns(4)
+    with col_h1:
+        st.metric("Evaporator", f"{t_ev:.0f}°C", help="Temperature where waste heat is absorbed by refrigerant")
+    with col_h2:
+        st.metric("Compressor", "Electric", help="Compressor driven by electrical energy")
+    with col_h3:
+        st.metric("Condenser", f"{t_c:.0f}°C", help="Temperature where heat is released to process")
+    with col_h4:
+        st.metric("Expansion Valve", "Pressure Drop", help="Reduces refrigerant pressure before evaporator")
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Information box with component descriptions
+    st.info(f"""
+**💡 Understanding the Heat Pump System:**
+
+**Process Side:**
+• **Heat Supply ({supply_temp:.0f}°C):** Temperature at which heat is supplied to your process
+• **Process Temperature ({process_temp:.0f}°C):** Operating temperature of your industrial process
+• **Heat Return ({return_temp:.0f}°C):** Temperature of heat returning from the process
+
+**Heat Pump Components:**
+
+1. **EVAPORATOR ({t_ev:.0f}°C):** 
+   - Absorbs heat from waste heat stream
+   - Refrigerant evaporates (changes from liquid to gas)
+   - Waste heat is cooled from {t_in1:.0f}°C to {t_out1:.0f}°C
+
+2. **COMPRESSOR:** 
+   - Compresses refrigerant gas using electrical energy
+   - Increases pressure and temperature of refrigerant
+   - Key component requiring electrical power input
+
+3. **CONDENSER ({t_c:.0f}°C):** 
+   - Releases heat to process heat stream
+   - Refrigerant condenses (changes from gas to liquid)
+   - Process fluid is heated from {return_temp:.0f}°C to {supply_temp:.0f}°C
+
+4. **EXPANSION VALVE:** 
+   - Reduces refrigerant pressure before evaporator
+   - Allows refrigerant to expand and cool
+   - Completes the refrigeration cycle
+
+**How It Works:**
+The refrigerant continuously circulates: Waste heat enters the EVAPORATOR where it's absorbed, the COMPRESSOR increases pressure using electricity, heat is released in the CONDENSER to your process, and the EXPANSION VALVE reduces pressure to complete the cycle. This allows the heat pump to upgrade low-temperature waste heat to useful high-temperature process heat.
+    """)
 
     navigation_buttons()
+
 
 elif current_page == "Waste Heat":
     st.title("Waste Heat Assessment")
@@ -2000,107 +2198,6 @@ elif current_page == "Results":
     # Environmental impact
     st.subheader("🌍 Environmental Impact")
     st.metric("CO₂ Reduction", f"{results.get('co2_savings', 0):,.0f} tonnes/year")
-
-
-
-
-
-    # Process Model - Clean Version with TOP LEFT and BOTTOM LEFT arrows
-    st.markdown("---")
-    st.subheader("📊 Process Model")
-    
-    # Get temperature values from customer inputs
-    process_temp = st.session_state.process_temp
-    supply_temp = st.session_state.T_out2
-    return_temp = process_temp - 15  # Estimated return temperature
-    
-    # Create white container box
-    st.markdown("""
-    <div style='background: white; padding: 3rem 2rem; border-radius: 12px; 
-                border: 2px solid #e0e0e0; margin: 2rem 0;'>
-    """, unsafe_allow_html=True)
-    
-    # TOP CENTER: Process Exhausts
-    col_top1, col_top2, col_top3 = st.columns([1, 2, 1])
-    with col_top2:
-        st.markdown("""
-        <div style='text-align: center; margin-bottom: 2rem;'>
-            <div style='font-size: 3rem; color: #ff9933; margin-bottom: 0.5rem;'>↑</div>
-            <strong style='color: #1a1a1a; font-size: 1.1rem;'>Process Exhausts</strong>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Create main layout row
-    col_left, col_center, col_right = st.columns([2.5, 3, 2])
-    
-    # LEFT COLUMN: Heat Supply (TOP) and Heat Return (BOTTOM) using flexbox
-    with col_left:
-        heat_supply_html = f"""
-        <div style='display: flex; flex-direction: column; justify-content: space-between; min-height: 450px;'>
-            <div style='text-align: left; padding: 1rem 0;'>
-                <div style='margin-bottom: 1rem;'>
-                    <strong style='color: #1a1a1a; font-size: 1rem; display: block;'>Heat Supply</strong>
-                    <strong style='color: #1a1a1a; font-size: 1rem; display: block;'>Temperature to</strong>
-                    <strong style='color: #1a1a1a; font-size: 1rem; display: block; margin-bottom: 0.75rem;'>the process</strong>
-                    <strong style='color: #0066cc; font-size: 1.5rem; display: block; margin-bottom: 1rem;'>{supply_temp:.0f}°C</strong>
-                </div>
-                <div style='text-align: right; padding-right: 1rem;'>
-                    <span style='color: #cc3333; font-size: 4rem; font-weight: bold; line-height: 1;'>→</span>
-                </div>
-            </div>
-            <div style='text-align: left; padding: 1rem 0;'>
-                <div style='text-align: right; padding-right: 1rem; margin-bottom: 1rem;'>
-                    <span style='color: #cc3333; font-size: 4rem; font-weight: bold; line-height: 1;'>←</span>
-                </div>
-                <div>
-                    <strong style='color: #1a1a1a; font-size: 1rem; display: block;'>Heat Return</strong>
-                    <strong style='color: #1a1a1a; font-size: 1rem; display: block;'>Temperature</strong>
-                    <strong style='color: #1a1a1a; font-size: 1rem; display: block; margin-bottom: 0.75rem;'>from the process</strong>
-                    <strong style='color: #0066cc; font-size: 1.5rem; display: block;'>{return_temp:.0f}°C</strong>
-                </div>
-            </div>
-        </div>
-        """
-        st.markdown(heat_supply_html, unsafe_allow_html=True)
-    
-    # CENTER COLUMN: Process Temperature Box
-    with col_center:
-        process_box_html = f"""
-        <div style='display: flex; align-items: center; justify-content: center; min-height: 450px;'>
-            <div style='background: white; 
-                        padding: 3rem 2.5rem; 
-                        border: 4px solid #0066cc; 
-                        border-radius: 12px;
-                        text-align: center;
-                        width: 100%;'>
-                <strong style='color: #0066cc; font-size: 1.3rem; display: block; margin-bottom: 1.5rem;'>Process Temperature</strong>
-                <strong style='color: #0066cc; font-size: 3.5rem; display: block;'>{process_temp:.0f}°C</strong>
-            </div>
-        </div>
-        """
-        st.markdown(process_box_html, unsafe_allow_html=True)
-    
-    # RIGHT COLUMN: Empty (for spacing)
-    with col_right:
-        st.markdown("<div style='height: 450px;'></div>", unsafe_allow_html=True)
-    
-    # Close the white container box
-    st.markdown("</div>", unsafe_allow_html=True)
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    # Information box
-    st.info(f"""
-**💡 Understanding Your Process:**
-
-• **Heat Supply Temperature ({supply_temp:.0f}°C):** Temperature at which heat is supplied to your process
-
-• **Process Temperature ({process_temp:.0f}°C):** Operating temperature of your industrial process
-
-• **Heat Return Temperature ({return_temp:.0f}°C):** Estimated return temperature after heat transfer (calculated as process temp - 15°C)
-
-• **Process Exhausts:** Excess heat from your process that can be recovered by heat pumps
-    """)
 
     # Contact form
     st.header("📇 Get Your Detailed Report")
