@@ -48,10 +48,10 @@ ELECTRICITY_CO2_KG_PER_MWH = 50.0
 
 # Page navigation - Investment Variables hidden from customers
 PAGES = [
-    "Welcome",
-    "Basic Site Parameters",
-    "Waste Heat",
-    "Investment & Returns"
+    "Home",
+    "Step 1 of 3",
+    "Step 2 of 3",
+    "Step 3 of 3"
 ]
 
 # ==================== SESSION STATE INITIALIZATION ====================
@@ -658,12 +658,13 @@ def show_brand_bar(logo_path=LOGO_PATH):
 
 def show_progress_bar():
     """Display progress indicator"""
-    progress = (st.session_state.current_page / (len(PAGES) - 1)) * 100
+    # Exclude Home page from step count (current_page starts at 1 for Step 1)
+    progress = ((st.session_state.current_page - 1) / (len(PAGES) - 2)) * 100
     st.markdown(f"""
     <div style="--progress: {progress}%" class="page-progress"></div>
     <div class="step-indicator">
         <div style="font-size: 14px; color: #10b981; font-weight: 600; margin-bottom: 0.5rem;">
-            STEP {st.session_state.current_page + 1} OF {len(PAGES)}
+            STEP {st.session_state.current_page} OF {len(PAGES) - 1}
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -959,24 +960,24 @@ def generate_quick_estimate_pdf(
                 pass
         
         c.setFillColor(colors.white)
-        c.setFont("Helvetica-Bold", 18)
+        c.setFont("Helvetica-Bold", 20)
         c.drawString(140, height - 45, page_title)
-        c.setFont("Helvetica", 10)
+        c.setFont("Helvetica", 11)
         c.drawString(140, height - 63, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     
     def draw_section_header(c, y, title, color_hex):
         """Draw a section header"""
         c.setFillColor(colors.HexColor(color_hex))
-        c.setFont("Helvetica-Bold", 14)
+        c.setFont("Helvetica-Bold", 16)
         c.drawString(margin, y, title)
         return y - 20
     
     def draw_param(c, y, label, value, indent=60):
         """Draw a parameter line"""
         c.setFillColor(colors.black)
-        c.setFont("Helvetica", 11)
+        c.setFont("Helvetica", 12)
         c.drawString(indent, y, f"{label}")
-        c.setFont("Helvetica-Bold", 11)
+        c.setFont("Helvetica-Bold", 12)
         c.drawString(280, y, str(value))
         return y - 18
     
@@ -1066,9 +1067,9 @@ def generate_quick_estimate_pdf(
     c.rect(margin, y - 50, width - 80, 70, stroke=1, fill=1)
     
     c.setFillColor(colors.black)
-    c.setFont("Helvetica-Bold", 11)
+    c.setFont("Helvetica-Bold", 12)
     c.drawString(margin + 10, y + 10, "DISCLAIMER")
-    c.setFont("Helvetica", 9)
+    c.setFont("Helvetica", 10)
     
     disclaimer_text = [
         "This estimate is based on the information you provided and uses indicative assumptions.",
@@ -1133,7 +1134,7 @@ if st.session_state.current_page > 0:
 
 current_page = PAGES[st.session_state.current_page]
 
-if current_page == "Welcome":
+if current_page == "Home":
     # Clean welcome page
     st.markdown("""
     <div style='text-align: center; padding: 3rem 2rem;'>
@@ -1178,7 +1179,7 @@ if current_page == "Welcome":
 
 
 
-elif current_page == "Basic Site Parameters":
+elif current_page == "Step 1 of 3":
     st.title("Basic Site Parameters")
 
     colA, colB = st.columns(2)
@@ -1262,6 +1263,97 @@ elif current_page == "Basic Site Parameters":
     operating_hours_est = calculate_operating_hours()
         # st.info(f"**Operating hours per year:** {operating_hours_est:.0f} h/year")  # Hidden per user request
 
+    # Reference to Process Model diagram
+    st.info("💡 **See diagram below for a visual reference of your process heat flow**")
+
+    # Process Model - Simple Process Flow Only
+    st.markdown("---")
+    st.subheader("📊 Process Model")
+    
+    # Get temperature values from customer inputs
+    process_temp = st.session_state.process_temp
+    supply_temp = st.session_state.T_out2
+    return_temp = process_temp - 15
+    
+    # PROCESS HEAT FLOW
+    st.markdown("#### Process Heat Flow")
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Process Exhausts - Positioned more to the center
+    st.markdown(f"""
+    <div style='text-align: center; margin-bottom: 1.5rem; margin-left: 200px;'>
+        <div style='font-size: 0.95rem; font-weight: 600; color: #ff9933; margin-bottom: 0.3rem;'>Process Exhausts</div>
+        <div style='font-size: 0.8rem; color: #666; margin-bottom: 0.5rem;'>(waste heat)</div>
+        <div style='display: flex; flex-direction: column; align-items: center;'>
+            <div style='color: #ff9933; font-size: 2rem; line-height: 0.8;'>▲</div>
+            <div style='width: 3px; height: 40px; background-color: #ff9933;'></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Main layout with columns
+    col_left, col_center, col_right = st.columns([1.4, 1.3, 0.5])
+    
+    with col_left:
+        # Heat Supply Temperature - Top arrow
+        st.markdown(f"""
+        <div style='display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-bottom: 0;'>
+            <div style='text-align: right;'>
+                <div style='font-size: 0.9rem; font-weight: 600; color: #0066cc; line-height: 1.3;'>Heat Supply Temperature</div>
+                <div style='font-size: 1.4rem; font-weight: bold; color: #0066cc; line-height: 1.2;'>{supply_temp:.0f}°C</div>
+            </div>
+            <div style='display: flex; align-items: center; margin-top: 8px;'>
+                <div style='width: 50px; height: 3px; background-color: #cc3333;'></div>
+                <div style='color: #cc3333; font-size: 2rem; line-height: 0.8; margin-left: -5px;'>▶</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Spacer
+        st.markdown("<div style='height: 70px;'></div>", unsafe_allow_html=True)
+        
+        # Heat Return Temperature - Bottom arrow
+        st.markdown(f"""
+        <div style='display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 0;'>
+            <div style='text-align: right;'>
+                <div style='font-size: 1.4rem; font-weight: bold; color: #0066cc; line-height: 1.2;'>{return_temp:.0f}°C</div>
+                <div style='font-size: 0.9rem; font-weight: 600; color: #0066cc; line-height: 1.3;'>Heat Return Temperature</div>
+            </div>
+            <div style='display: flex; align-items: center; margin-bottom: 8px;'>
+                <div style='width: 50px; height: 3px; background-color: #cc3333;'></div>
+                <div style='color: #cc3333; font-size: 2rem; line-height: 0.8; margin-left: -5px;'>▶</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_center:
+        # Process Temperature Rectangle
+        st.markdown(f"""
+        <div style='
+            width: 300px;
+            height: 160px;
+            padding: 0;
+            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+            border: 3px solid #0066cc;
+            border-radius: 12px;
+            box-shadow: 0 6px 16px rgba(0, 102, 204, 0.18);
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            margin-left: -5px;
+        '>
+            <div style='color: #0066cc; font-size: 1.2rem; font-weight: 600; margin-bottom: 0.8rem; line-height: 1.2;'>Process Temperature</div>
+            <div style='color: #0066cc; font-size: 3rem; font-weight: bold; line-height: 1;'>{process_temp:.0f}°C</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_right:
+        st.write("")
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+
     # Demand & Energy Prices Section
     st.markdown("---")
     st.markdown("### 💰 Demand & Energy Prices")
@@ -1318,10 +1410,11 @@ elif current_page == "Basic Site Parameters":
     emission_factor_fuel_kWh = FUEL_EMISSION_FACTORS_KG_PER_KWH.get(fuel_type, 0.2027)
     emission_factor_elec = ELECTRICITY_CO2_KG_PER_MWH
     
-    if uses_fuel:
-        st.info(f"**Emission factors used:** {emission_factor_fuel_kWh:.3f} kgCO₂/kWh for {fuel_type} and {emission_factor_elec:.0f} kgCO₂/MWh for electricity")
-    else:
-        st.info(f"**Emission factors used:** {emission_factor_elec:.0f} kgCO₂/MWh for electricity (comparing to {emission_factor_fuel_kWh:.3f} kgCO₂/kWh natural gas baseline)")
+    # Emission factors hidden from customer view
+    # if uses_fuel:
+    #     st.info(f"**Emission factors used:** {emission_factor_fuel_kWh:.3f} kgCO₂/kWh for {fuel_type} and {emission_factor_elec:.0f} kgCO₂/MWh for electricity")
+    # else:
+    #     st.info(f"**Emission factors used:** {emission_factor_elec:.0f} kgCO₂/MWh for electricity (comparing to {emission_factor_fuel_kWh:.3f} kgCO₂/kWh natural gas baseline)")
 
     # Calculate Q_process
     if uses_fuel:
@@ -1370,7 +1463,8 @@ elif current_page == "Basic Site Parameters":
             value=st.session_state.get("Q_process", Q_process_calculated),
             help="Enter the average thermal power required for your industrial process."
         )
-        st.success("✅ Using your manually entered value")
+        # Success message hidden from customer view
+        # st.success("✅ Using your manually entered value")
     else:
         # Use calculated value, show as metric
         Q_process = Q_process_calculated
@@ -1387,95 +1481,10 @@ elif current_page == "Basic Site Parameters":
     st.session_state.emission_factor_fuel_kWh = emission_factor_fuel_kWh
     st.session_state.emission_factor_elec = emission_factor_elec
 
-    # Process Model - Simple Process Flow Only
-    st.markdown("---")
-    st.subheader("📊 Process Model")
-    
-    # Get temperature values from customer inputs
-    process_temp = st.session_state.process_temp
-    supply_temp = st.session_state.T_out2
-    return_temp = process_temp - 15
-    
-    # PROCESS HEAT FLOW (Matching updated sketch)
-    st.markdown("#### Process Heat Flow")
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    # Process Exhausts (Top)
-    st.markdown(f"""
-    <div style='text-align: center; margin-bottom: 1.5rem;'>
-        <div style='color: #ff9933; font-size: 2.8rem; line-height: 1; margin-bottom: 0.3rem;'>↑</div>
-        <div style='font-size: 0.95rem; font-weight: 600; color: #ff9933;'>Process Exhausts</div>
-        <div style='font-size: 0.8rem; color: #666;'>(waste heat)</div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Main layout with columns
-    col_left, col_center, col_right = st.columns([1.4, 1.3, 0.5])
-    
-    with col_left:
-        # Heat Supply Temperature - Top arrow (horizontal, pointing right)
-        st.markdown(f"""
-        <div style='display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-bottom: 0;'>
-            <div style='text-align: right;'>
-                <div style='font-size: 0.9rem; font-weight: 600; color: #0066cc; line-height: 1.3;'>Heat Supply Temperature</div>
-                <div style='font-size: 1.4rem; font-weight: bold; color: #0066cc; line-height: 1.2;'>{supply_temp:.0f}°C</div>
-            </div>
-            <div style='display: flex; align-items: center; margin-top: 8px;'>
-                <div style='width: 50px; height: 3px; background-color: #cc3333;'></div>
-                <div style='color: #cc3333; font-size: 2rem; line-height: 0.8; margin-left: -5px;'>▶</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Spacer
-        st.markdown("<div style='height: 70px;'></div>", unsafe_allow_html=True)
-        
-        # Heat Return Temperature - Bottom arrow (horizontal, pointing LEFT)
-        st.markdown(f"""
-        <div style='display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 0;'>
-            <div style='text-align: right;'>
-                <div style='font-size: 1.4rem; font-weight: bold; color: #0066cc; line-height: 1.2;'>{return_temp:.0f}°C</div>
-                <div style='font-size: 0.9rem; font-weight: 600; color: #0066cc; line-height: 1.3;'>Heat Return Temperature</div>
-            </div>
-            <div style='display: flex; align-items: center; margin-bottom: 8px;'>
-                <div style='color: #cc3333; font-size: 2rem; line-height: 0.8; margin-right: -5px;'>◀</div>
-                <div style='width: 50px; height: 3px; background-color: #cc3333;'></div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col_center:
-        # Process Temperature Rectangle
-        st.markdown(f"""
-        <div style='
-            width: 300px;
-            height: 160px;
-            padding: 0;
-            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-            border: 3px solid #0066cc;
-            border-radius: 12px;
-            box-shadow: 0 6px 16px rgba(0, 102, 204, 0.18);
-            text-align: center;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            margin-left: -5px;
-        '>
-            <div style='color: #0066cc; font-size: 1.2rem; font-weight: 600; margin-bottom: 0.8rem; line-height: 1.2;'>Process Temperature</div>
-            <div style='color: #0066cc; font-size: 3rem; font-weight: bold; line-height: 1;'>{process_temp:.0f}°C</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col_right:
-        st.write("")
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-
     navigation_buttons()
 
 
-elif current_page == "Waste Heat":
+elif current_page == "Step 2 of 3":
     st.title("Waste Heat Assessment")
     
     st.session_state.has_waste = st.radio(
@@ -1487,18 +1496,9 @@ elif current_page == "Waste Heat":
     )
 
     if st.session_state.has_waste == "Yes":
-        st.markdown("<div style='margin: 1rem 0;'></div>", unsafe_allow_html=True)
+        st.markdown("---")
         
         # Section 1: Release Method
-        st.markdown("""
-        <div style='background: #ffffff; 
-                    padding: 1rem 1.25rem; 
-                    border-radius: 8px; 
-                    border: 2px solid #e5e7eb;
-                    margin-bottom: 1rem;
-                    box-shadow: 0 1px 3px rgba(0,0,0,0.05);'>
-        """, unsafe_allow_html=True)
-        
         st.session_state.how_released = st.selectbox(
             "How is the waste heat currently released?",
             ["Dedicated cooling system or exhaust pipe",
@@ -1509,19 +1509,10 @@ elif current_page == "Waste Heat":
                    "Other / Not sure"].index(st.session_state.how_released),
             help="If not captured through an exhaust pipe it might not be possible to recover it."
         )
-        
-        st.markdown("</div>", unsafe_allow_html=True)
 
-        # Section 2: Temperature Information
-        st.markdown("""
-        <div style='background: #ffffff; 
-                    padding: 1rem 1.25rem; 
-                    border-radius: 8px; 
-                    border: 2px solid #e5e7eb;
-                    margin-bottom: 1rem;
-                    box-shadow: 0 1px 3px rgba(0,0,0,0.05);'>
-        """, unsafe_allow_html=True)
+        st.markdown("---")
         
+        # Section 2: Temperature Information
         col1, col2 = st.columns([1, 1])
         
         with col1:
@@ -1543,21 +1534,11 @@ elif current_page == "Waste Heat":
                     help="The temperature of your waste heat stream"
                 )
             else:
-                st.markdown("<div style='padding-top: 1.5rem;'></div>", unsafe_allow_html=True)
                 st.info("💡 We'll use your process temperature as an estimate")
-        
-        st.markdown("</div>", unsafe_allow_html=True)
 
-        # Section 3: Quantity Information
-        st.markdown("""
-        <div style='background: #ffffff; 
-                    padding: 1rem 1.25rem; 
-                    border-radius: 8px; 
-                    border: 2px solid #e5e7eb;
-                    margin-bottom: 1rem;
-                    box-shadow: 0 1px 3px rgba(0,0,0,0.05);'>
-        """, unsafe_allow_html=True)
+        st.markdown("---")
         
+        # Section 3: Quantity Information
         col3, col4 = st.columns([1, 1])
         
         with col3:
@@ -1585,38 +1566,20 @@ elif current_page == "Waste Heat":
                     index=["10-30% (very efficient process)", "31-50% (average for modern processes)", "51-80% (Typical for processes without any control for minimising waste heat)"].index(st.session_state.w_amt_band) if st.session_state.w_amt_band in ["10-30% (very efficient process)", "31-50% (average for modern processes)", "51-80% (Typical for processes without any control for minimising waste heat)"] else 1,
                     help="Estimate what fraction of your total energy input is ultimately rejected as waste heat."
                 )
-        
-        st.markdown("</div>", unsafe_allow_html=True)
 
-        # Current Utilization question
-        st.markdown("""
-        <div style='background: #ffffff; 
-                    padding: 1rem 1.25rem; 
-                    border-radius: 8px; 
-                    border: 2px solid #e5e7eb;
-                    margin-bottom: 1rem;
-                    box-shadow: 0 1px 3px rgba(0,0,0,0.05);'>
-        """, unsafe_allow_html=True)
+        st.markdown("---")
         
+        # Current Utilization question
         st.session_state.has_waste_heat_processor = st.radio(
             "Do you have existing waste heat recovery equipment?",
             ["Yes", "No"],
             index=["Yes", "No"].index(st.session_state.has_waste_heat_processor),
             help="Select Yes if you already have equipment that uses waste heat (e.g. a heat recovery unit or ORC)."
         )
-        
-        st.markdown("</div>", unsafe_allow_html=True)
 
-        # Waste heat medium selection
-        st.markdown("""
-        <div style='background: #ffffff; 
-                    padding: 1rem 1.25rem; 
-                    border-radius: 8px; 
-                    border: 2px solid #e5e7eb;
-                    margin-bottom: 1rem;
-                    box-shadow: 0 1px 3px rgba(0,0,0,0.05);'>
-        """, unsafe_allow_html=True)
+        st.markdown("---")
         
+        # Waste heat medium selection
         form_options = ["Humid air", "Dry hot air", "Hot water", "Pure steam", "Don't know"]
         
         st.session_state.waste_form = st.selectbox(
@@ -1629,7 +1592,6 @@ elif current_page == "Waste Heat":
         waste_form = st.session_state.waste_form
 
         if waste_form == "Humid air":
-            st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
             st.markdown("**💧 Humidity Information**")
             st.session_state.humidity_ratio_known = st.radio(
                 "Do you know the humidity ratio of the waste air?",
@@ -1642,12 +1604,10 @@ elif current_page == "Waste Heat":
                 st.success("💡 **Great!** Having humidity data helps us design more accurate heat recovery systems.")
             else:
                 st.info("💡 **No problem.** We'll estimate typical humidity values for your application.")
-        
-        st.markdown("</div>", unsafe_allow_html=True)
 
-        # Preliminary Feasibility Assessment
-        st.markdown("<div style='margin: 1.5rem 0;'></div>", unsafe_allow_html=True)
+        st.markdown("---")
         
+        # Preliminary Feasibility Assessment
         process_temp = st.session_state.process_temp
         T_out2 = st.session_state.T_out2
         energy_vector = st.session_state.energy_vector
@@ -1695,7 +1655,6 @@ elif current_page == "Waste Heat":
                 st.write(f"• {note}")
         
     else:
-        st.markdown("<div style='margin: 1rem 0;'></div>", unsafe_allow_html=True)
         st.warning("""
         ⚠️ **No waste heat available**
         
@@ -1752,9 +1711,7 @@ elif current_page == "Investment Variables":
 
     navigation_buttons()
 
-elif current_page == "Investment & Returns":
-    # Title removed - only subheader below
-    
+elif current_page == "Step 3 of 3":
     try:
         # Get values
         gate = st.session_state.get("_gate", {"assumptions": {}})
@@ -1869,35 +1826,36 @@ elif current_page == "Investment & Returns":
         irr_low = irr_from_savings(capex_low, savings_low, years=10)
         irr_high = irr_from_savings(capex_high, savings_high, years=10)
 
-        # Display results
+        # Calculate NPV (Net Present Value) at 8% discount rate
+        def calculate_npv(capex, annual_savings, years=10, discount_rate=0.08):
+            npv = -capex
+            for year in range(1, years + 1):
+                npv += annual_savings / ((1 + discount_rate) ** year)
+            return npv
+        
+        npv_low = calculate_npv(capex_low, savings_low, 10, 0.08)
+        npv_high = calculate_npv(capex_high, savings_high, 10, 0.08)
+
+        # Display results - Table format
         st.subheader("📦 Investment and Returns")
         
-        # Two-column layout with minimal gap
-        col_low, col_high = st.columns(2, gap="small")
+        # Prepare data for table
+        payback_high_str = f"{payback_high:.1f} years" if math.isfinite(payback_high) and payback_high <= 10 else ">10 years"
+        payback_low_str = f"{payback_low:.1f} years" if math.isfinite(payback_low) and payback_low <= 10 else ">10 years"
         
-        with col_low:
-            st.markdown("**Low Case**")
-            st.markdown(f"**Investment:** £{capex_low:,.0f}")
-            if math.isfinite(payback_low) and payback_low <= 10:
-                st.markdown(f"**Payback:** {payback_low:.1f} years")
-            else:
-                st.markdown(f"**Payback:** >10 years")
-            st.markdown(f"**IRR:** {irr_low:.0f}%")
+        kpi_data = {
+            "Estimated Investment": [f"£{capex_high:,.0f}", f"£{capex_low:,.0f}"],
+            "Simple Payback Time": [payback_high_str, payback_low_str],
+            "Internal Rate of Return": [f"{irr_high:.0f}%", f"{irr_low:.0f}%"],
+            "Net Present Value*": [f"£{npv_high:,.0f}", f"£{npv_low:,.0f}"],
+            "CO₂ Reduction": [f"{co2_savings:,.0f} tonnes/year", f"{co2_savings:,.0f} tonnes/year"]
+        }
         
-        with col_high:
-            st.markdown("**High Case**")
-            st.markdown(f"**Investment:** £{capex_high:,.0f}")
-            if math.isfinite(payback_high) and payback_high <= 10:
-                st.markdown(f"**Payback:** {payback_high:.1f} years")
-            else:
-                st.markdown(f"**Payback:** >10 years")
-            st.markdown(f"**IRR:** {irr_high:.0f}%")
+        df_kpi = pd.DataFrame(kpi_data, index=["High Case", "Low Case"])
         
-        # Environmental Impact integrated
-        st.markdown("---")
-        st.markdown(f"**🌍 CO₂ Reduction:** {co2_savings:,.0f} tonnes/year")
-
-        st.caption("Note: For projects below ~250 kW, alternative solutions may be more suitable.")
+        # Display table
+        st.dataframe(df_kpi, use_container_width=True)
+        st.caption("*Net Present Value calculated at 8% discount rate over 10 years")
 
         # Calculate cash flow data
         def calculate_cash_flow(capex, annual_savings, years=10):
@@ -1921,29 +1879,6 @@ elif current_page == "Investment & Returns":
         breakeven_low = find_breakeven(cum_low)
         breakeven_high = find_breakeven(cum_high)
 
-        # Key Financial Insights
-        st.markdown("---")
-        st.subheader("💡 Key Financial Insights")
-        insight_col1, insight_col2 = st.columns(2, gap="small")
-        
-        with insight_col1:
-            st.markdown("**High Case — Net Position (Year 10)**")
-            st.markdown(f"### £{cum_high[-1]:,.0f}")
-            if cum_high[-1] > 0:
-                st.caption(f"£{cum_high[-1] + capex_high:,.0f} profit")
-            st.markdown("---")
-            avg_roi = ((cum_high[-1] + capex_high) / capex_high * 100) if capex_high > 0 else 0
-            st.markdown("**Average ROI (High Case)**")
-            st.markdown(f"### {avg_roi:.1f}%")
-            st.caption("Return on Investment over 10 years")
-        
-        with insight_col2:
-            st.markdown("**Low Case — Net Position (Year 10)**")
-            st.markdown(f"### £{cum_low[-1]:,.0f}")
-            if cum_low[-1] > 0:
-                st.caption(f"£{cum_low[-1] + capex_low:,.0f} profit")
-
-        # Cash flow analysis
         st.markdown("---")
         st.subheader("📊 10-Year Cash Flow Analysis")
         st.markdown("Visualize your investment returns over time with cumulative cash flow projections.")
