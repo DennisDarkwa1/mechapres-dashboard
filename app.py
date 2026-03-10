@@ -1,6 +1,6 @@
 # app.py — Mechapres Industrial Heat Pump Calculator
 # Professional multi-page flow for customer estimates
-# DEBUGGED VERSION v2.0
+# UPDATED VERSION with Vertex-Aligned Process Heat Flow Diagram
 
 import math
 from io import BytesIO
@@ -120,10 +120,6 @@ def init_session_state():
         if key not in st.session_state:
             st.session_state[key] = value
     
-    # Annual Energy Costs
-    if "annual_band" not in st.session_state:
-        st.session_state.annual_band = "£100k–£500k"
-    
     # Investment Variables
     investment_defaults = {
         "design_pm": 50000.0,
@@ -142,6 +138,9 @@ init_session_state()
 
 # ==================== HELPER FUNCTIONS ====================
 
+
+# ==================== CALCULATION UTILITY FUNCTIONS ====================
+
 def system_uses_fuel(heat_supply_tech):
     """Determine if the heat supply system uses fuel or electricity"""
     electric_systems = ["Electric boiler", "Industrial heat pump"]
@@ -159,10 +158,16 @@ def get_efficiency_default(heat_supply_tech):
     return efficiency_map.get(heat_supply_tech, 80.0)
 
 def calculate_operating_hours():
-    """Calculate operating hours from production days and hours per day"""
+    """
+    Calculate annual operating hours
+    Formula: Production Days × Hours per Day
+    Bounded between 100 and 8760 hours (max hours in a year)
+    """
     days = float(st.session_state.get("prod_days", 250))
     hours_per_day = float(st.session_state.get("prod_hours_per_day", 12))
     return min(max(days * hours_per_day, 100.0), 8760.0)
+
+# ==================== END CALCULATION UTILITY FUNCTIONS ====================
 
 # ==================== UI COMPONENTS ====================
 
@@ -705,7 +710,26 @@ def evaluate_decision_tree(
     waste_amount_pct_band, waste_heat_captured=None, has_waste_heat_processor=None,
     how_released=None, waste_form=None, humidity_ratio_known=None, q_waste_kw=None
 ):
-    """Evaluate heat pump feasibility based on decision tree logic"""
+    """
+    ==================== FEASIBILITY ASSESSMENT CALCULATIONS ====================
+    Evaluate heat pump feasibility based on decision tree logic
+    
+    This function checks multiple criteria to determine if a heat pump is:
+    - Viable (proceed)
+    - Feasible with cautions (caution)
+    - Better suited to heat exchangers (suggest_hx)
+    - Not viable (not_viable)
+    
+    Key checks:
+    1. Process temperature range (80-200°C)
+    2. Energy vector constraints (Steam, Hot Water, Hot Air)
+    3. Waste heat availability and temperature
+    4. Waste heat release method (dedicated vs general ventilation)
+    5. Waste heat quantity estimation
+    
+    Returns:
+        Dictionary with status, notes, and assumptions for calculations
+    """
     TH = DT_THRESHOLDS
     notes = []
     assumptions = {}
@@ -809,7 +833,31 @@ def excel_performance_logic(T_in1, T_out2, P_out2, Q_process,
                             T_app_condenser=8.0, T_app_evaporator=8.0, 
                             T_ev_minimum=70.0, lorentz_eff=0.60, 
                             waste_heat_min_pct=30.0, waste_heat_max_pct=60.0):
-    """Calculate heat pump performance metrics"""
+    """
+    ==================== HEAT PUMP PERFORMANCE CALCULATIONS ====================
+    Calculate heat pump COP (Coefficient of Performance) and sizing parameters
+    
+    Parameters:
+        T_in1: Waste heat input temperature (°C)
+        T_out2: Required output/supply temperature (°C)
+        P_out2: Output pressure (barA)
+        Q_process: Process heat demand (kW)
+        T_app_condenser: Temperature approach in condenser (°C) - default 8.0
+        T_app_evaporator: Temperature approach in evaporator (°C) - default 8.0
+        T_ev_minimum: Minimum evaporator temperature (°C) - default 70.0
+        lorentz_eff: Lorentz efficiency factor (0-1) - default 0.60
+        waste_heat_min_pct: Minimum waste heat percentage (%) - default 30.0
+        waste_heat_max_pct: Maximum waste heat percentage (%) - default 60.0
+    
+    Returns:
+        Dictionary containing:
+            - COP_carnot: Theoretical Carnot COP
+            - COP_real: Real-world COP (Carnot × Lorentz efficiency)
+            - Temperatures (condenser, evaporator)
+            - Waste heat requirements
+            - Electrical consumption estimates
+            - System capacity
+    """
     
     # Validation
     if Q_process <= 0:
@@ -817,52 +865,60 @@ def excel_performance_logic(T_in1, T_out2, P_out2, Q_process,
     if T_in1 is None or T_out2 is None:
         raise ValueError("Temperature values cannot be None")
     
-    # Calculate temperatures
-    T_cond_steam = T_out2 + T_app_condenser - 2.0
-    T_evap_raw = T_in1 - T_app_evaporator
-    T_evap = max(T_evap_raw, T_ev_minimum)
+    # --- TEMPERATURE CALCULATIONS ---
+    # Calculate condenser and evaporator temperatures with approach values
+    T_cond_steam = T_out2 + T_app_condenser - 2.0  # Condenser temperature (°C)
+    T_evap_raw = T_in1 - T_app_evaporator  # Raw evaporator temperature (°C)
+    T_evap = max(T_evap_raw, T_ev_minimum)  # Ensure minimum evaporator temperature
 
-    # Calculate COP
+    # --- COP CALCULATION ---
+    # Calculate Carnot COP (theoretical maximum efficiency)
+    # COP_carnot = T_condenser / (T_condenser - T_evaporator)
     if T_cond_steam <= T_evap:
-        COP_carnot = 0.0
+        COP_carnot = 0.0  # Invalid condition: condenser temp must be higher
     else:
-        TcK, TeK = T_cond_steam + 273.15, T_evap + 273.15
+        TcK, TeK = T_cond_steam + 273.15, T_evap + 273.15  # Convert to Kelvin
         COP_carnot = TcK / (TcK - TeK)
 
+    # Calculate real-world COP using Lorentz efficiency factor
+    # Real COP is typically 50-70% of Carnot COP due to real-world losses
     COP_real = max(0.0, lorentz_eff * COP_carnot)
     
-    # Calculate waste heat requirements
-    wh_min = Q_process * (waste_heat_min_pct / 100.0)
-    wh_max = Q_process * (waste_heat_max_pct / 100.0)
+    # --- WASTE HEAT REQUIREMENTS ---
+    # Calculate range of waste heat needed (percentage of process demand)
+    wh_min = Q_process * (waste_heat_min_pct / 100.0)  # Minimum waste heat (kW)
+    wh_max = Q_process * (waste_heat_max_pct / 100.0)  # Maximum waste heat (kW)
     
-    # Calculate electrical consumption
+    # --- ELECTRICAL CONSUMPTION ---
+    # Calculate electrical power needed to drive the heat pump
+    # Electrical Power = Process Heat Demand / COP
     E_full = (Q_process / COP_real) if COP_real > 0 else float("inf")
-    E_min = E_full / 2.0 if math.isfinite(E_full) else float("inf")
+    E_min = E_full / 2.0 if math.isfinite(E_full) else float("inf")  # Minimum load scenario
     
     Q2_min = wh_min
     Q2_max = wh_max
-    capacity_MWth = Q_process / 1000.0
+    capacity_MWth = Q_process / 1000.0  # Convert to MW for reporting
 
     return {
-        "T_cond_steam": T_cond_steam,
-        "T_evap": T_evap,
-        "COP_carnot": COP_carnot,
-        "COP_real": COP_real,
-        "waste_heat_min_kW": wh_min,
-        "waste_heat_max_kW": wh_max,
-        "E_min_kW": E_min,
-        "E_max_kW": E_full,
-        "Q2_min_kW": Q2_min,
-        "Q2_max_kW": Q2_max,
-        "capacity_MWth": capacity_MWth
+        "T_cond_steam": T_cond_steam,  # Condenser temperature (°C)
+        "T_evap": T_evap,  # Evaporator temperature (°C)
+        "COP_carnot": COP_carnot,  # Theoretical Carnot COP
+        "COP_real": COP_real,  # Real-world COP
+        "waste_heat_min_kW": wh_min,  # Minimum waste heat required (kW)
+        "waste_heat_max_kW": wh_max,  # Maximum waste heat required (kW)
+        "E_min_kW": E_min,  # Minimum electrical consumption (kW)
+        "E_max_kW": E_full,  # Maximum electrical consumption (kW)
+        "Q2_min_kW": Q2_min,  # Heat source minimum (kW)
+        "Q2_max_kW": Q2_max,  # Heat source maximum (kW)
+        "capacity_MWth": capacity_MWth  # System thermal capacity (MW)
     }
+    # ==================== END HEAT PUMP PERFORMANCE CALCULATIONS ====================
 
 # ==================== PDF GENERATION ====================
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.pdfgen import canvas
-from reportlab.lib.utils import ImageReader
 
 def generate_report(inputs, results, logo_path=LOGO_PATH, brand=MECHAPRES_COLORS):
     """Generate PDF report"""
@@ -933,7 +989,7 @@ def generate_quick_estimate_pdf(
     process_temp, energy_vector, heat_supply_tech, fuel_type,
     T_out2, steam_p, prod_days, prod_hours_per_day, boiler_eff_pct,
     # Demand & Energy
-    fuel_price, electricity_price, annual_band,
+    fuel_price, electricity_price, yearly_cost,
     # Waste Heat
     has_waste, how_released, w_temp_known, w_temp, w_amt_known, q_waste_kw, w_amt_band,
     has_waste_heat_processor, waste_form,
@@ -1003,7 +1059,7 @@ def generate_quick_estimate_pdf(
     y = draw_section_header(c, y, "2. Demand & Energy Prices", brand["primary"])
     y = draw_param(c, y, "Fuel Cost:", f"£{fuel_price:.2f}/MWh")
     y = draw_param(c, y, "Electricity Cost:", f"£{electricity_price:.2f}/MWh")
-    y = draw_param(c, y, "Annual Energy Spend:", annual_band)
+    y = draw_param(c, y, "Annual Energy Spend:", f"£{yearly_cost:,.0f}")
     y -= 15
     
     # Waste Heat Assessment
@@ -1202,23 +1258,25 @@ elif current_page == "Step 1 of 3":
 
     colHeat1, colHeat2 = st.columns(2)
     
+    # Updated dropdown - removed Industrial heat pump, Combined heat and power, Other
     st.session_state.heat_supply_tech = colHeat1.selectbox(
         "How are you providing heat to the process?",
-        ["Fossil fuel boiler", "Electric boiler", "Industrial heat pump", "Combined heat and power", "Other"],
-        index=["Fossil fuel boiler", "Electric boiler", "Industrial heat pump", "Combined heat and power", "Other"].index(st.session_state.heat_supply_tech),
+        ["Fossil fuel boiler", "Electric boiler"],
+        index=["Fossil fuel boiler", "Electric boiler"].index(st.session_state.heat_supply_tech) if st.session_state.heat_supply_tech in ["Fossil fuel boiler", "Electric boiler"] else 0,
         help="Select the main technology currently providing heat to this process."
     )
     
     # Suggest efficiency based on heat supply technology
     suggested_eff = get_efficiency_default(st.session_state.heat_supply_tech)
     
+    # Updated help text for efficiency
     st.session_state.boiler_eff_pct = colHeat2.number_input(
         "Existing system efficiency (%)",
         40.0, 100.0,
         value=suggested_eff if st.session_state.boiler_eff_pct == 80.0 else st.session_state.boiler_eff_pct,
         step=1.0,
         format="%.0f",
-        help="Typical values: 80% for fossil fuel boilers, 95% for electric boilers, 90% for CHP or heat pumps (use design COP for industrial heat pumps)."
+        help="Typical Values: 80% for fossil fuel boilers or 95% for electric boilers"
     )
     
     # Store efficiency as decimal
@@ -1226,22 +1284,36 @@ elif current_page == "Step 1 of 3":
 
     colC, colD = st.columns(2)
     
-    st.session_state.T_out2 = colC.number_input(
-        "Required supply temperature (°C)",
-        50.0, 250.0,
-        value=st.session_state.T_out2,
-        step=1.0,
-        format="%.0f"
-    )
-    
+    # If Steam is selected, hide Required supply temperature and show Steam supply pressure instead
     if st.session_state.energy_vector == "Steam":
-        st.session_state.steam_p = colD.number_input(
+        # Show Steam supply pressure in left column
+        st.session_state.steam_p = colC.number_input(
             "Steam supply pressure (barA)",
             1.0, 20.0,
             value=st.session_state.steam_p,
             step=1.0,
             format="%.0f",
-            help="Operating pressure of your steam line in bar absolute."
+            help="Pressure of steam supplied to the process"
+        )
+        # Set T_out2 based on steam pressure (will be calculated from steam tables in backend)
+        # For now, keep the existing T_out2 value
+    else:
+        # Show Required supply temperature for Hot Water and Hot Air
+        # Minimum value = Process Temperature + 5°C
+        min_supply_temp = st.session_state.process_temp + 5.0
+        
+        # Ensure current value is at least the minimum
+        if st.session_state.T_out2 < min_supply_temp:
+            st.session_state.T_out2 = min_supply_temp
+        
+        st.session_state.T_out2 = colC.number_input(
+            "Required supply temperature (°C)",
+            min_value=min_supply_temp,
+            max_value=250.0,
+            value=max(st.session_state.T_out2, min_supply_temp),
+            step=1.0,
+            format="%.0f",
+            help=f"Minimum supply temperature must be at least {min_supply_temp:.0f}°C (Process Temperature + 5°C)"
         )
 
     colD1, colD2 = st.columns(2)
@@ -1261,12 +1333,11 @@ elif current_page == "Step 1 of 3":
     )
 
     operating_hours_est = calculate_operating_hours()
-        # st.info(f"**Operating hours per year:** {operating_hours_est:.0f} h/year")  # Hidden per user request
 
     # Reference to Process Model diagram
     st.info("💡 **See diagram below for a visual reference of your process heat flow**")
 
-    # Process Model - Simple Process Flow Only
+    # Process Model - UPDATED WITH VERTEX-ALIGNED ARROWS
     st.markdown("---")
     st.subheader("📊 Process Model")
     
@@ -1275,82 +1346,88 @@ elif current_page == "Step 1 of 3":
     supply_temp = st.session_state.T_out2
     return_temp = process_temp - 15
     
-    # PROCESS HEAT FLOW
+    # Check if Steam is selected to change label
+    is_steam = st.session_state.energy_vector == "Steam"
+    steam_pressure = st.session_state.steam_p if is_steam else None
+    
+    # PROCESS HEAT FLOW - Square box with arrows close to box and exhaust in middle
     st.markdown("#### Process Heat Flow")
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # Process Exhausts - Positioned more to the center
-    st.markdown(f"""
-    <div style='text-align: center; margin-bottom: 1.5rem; margin-left: 200px;'>
-        <div style='font-size: 0.95rem; font-weight: 600; color: #ff9933; margin-bottom: 0.3rem;'>Process Exhausts</div>
-        <div style='font-size: 0.8rem; color: #666; margin-bottom: 0.5rem;'>(waste heat)</div>
-        <div style='display: flex; flex-direction: column; align-items: center;'>
-            <div style='color: #ff9933; font-size: 2rem; line-height: 0.8;'>▲</div>
-            <div style='width: 3px; height: 40px; background-color: #ff9933;'></div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Main layout with columns
-    col_left, col_center, col_right = st.columns([1.4, 1.3, 0.5])
+    # Create layout with precise positioning
+    col_left, col_center, col_right = st.columns([2, 2.5, 2])
     
     with col_left:
-        # Heat Supply Temperature - Top arrow
-        st.markdown(f"""
-        <div style='display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-bottom: 0;'>
-            <div style='text-align: right;'>
-                <div style='font-size: 0.9rem; font-weight: 600; color: #0066cc; line-height: 1.3;'>Heat Supply Temperature</div>
-                <div style='font-size: 1.4rem; font-weight: bold; color: #0066cc; line-height: 1.2;'>{supply_temp:.0f}°C</div>
+        # Heat Supply - Arrow pointing LEFT (backwards), very close but not touching
+        if is_steam:
+            # Steam Supply Pressure - WITH VALUE
+            st.markdown(f"""
+            <div style='margin-top: 55px; text-align: right;'>
+                <div style='color: #0066cc; font-weight: 600; font-size: 0.9rem; margin-bottom: 5px;'>
+                    Steam Supply<br>Pressure<br>
+                    <span style='font-weight: bold; font-size: 1.3rem;'>{steam_pressure:.0f} barA</span>
+                </div>
+                <div style='color: #cc3333; font-size: 1.8rem; margin-right: 2px;'>◀━━━━━</div>
             </div>
-            <div style='display: flex; align-items: center; margin-top: 8px;'>
-                <div style='width: 50px; height: 3px; background-color: #cc3333;'></div>
-                <div style='color: #cc3333; font-size: 2rem; line-height: 0.8; margin-left: -5px;'>▶</div>
+            """, unsafe_allow_html=True)
+        else:
+            # Heat Supply Temperature - WITH VALUE
+            st.markdown(f"""
+            <div style='margin-top: 55px; text-align: right;'>
+                <div style='color: #0066cc; font-weight: 600; font-size: 0.9rem; margin-bottom: 5px;'>
+                    Heat Supply<br>Temperature<br>
+                    <span style='font-weight: bold; font-size: 1.3rem;'>{supply_temp:.0f}°C</span>
+                </div>
+                <div style='color: #cc3333; font-size: 1.8rem; margin-right: 2px;'>◀━━━━━</div>
             </div>
-        </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
         
         # Spacer
-        st.markdown("<div style='height: 70px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
         
-        # Heat Return Temperature - Bottom arrow
+        # Heat Return - Arrow pointing RIGHT, very close but not touching
         st.markdown(f"""
-        <div style='display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 0;'>
-            <div style='text-align: right;'>
-                <div style='font-size: 1.4rem; font-weight: bold; color: #0066cc; line-height: 1.2;'>{return_temp:.0f}°C</div>
-                <div style='font-size: 0.9rem; font-weight: 600; color: #0066cc; line-height: 1.3;'>Heat Return Temperature</div>
-            </div>
-            <div style='display: flex; align-items: center; margin-bottom: 8px;'>
-                <div style='width: 50px; height: 3px; background-color: #cc3333;'></div>
-                <div style='color: #cc3333; font-size: 2rem; line-height: 0.8; margin-left: -5px;'>▶</div>
+        <div style='text-align: right;'>
+            <div style='color: #cc3333; font-size: 1.8rem; margin-right: 2px;'>━━━━━▶</div>
+            <div style='color: #0066cc; margin-top: 5px;'>
+                <span style='font-weight: bold; font-size: 1.3rem;'>{return_temp:.0f}°C</span><br>
+                <span style='font-weight: 600; font-size: 0.9rem;'>Heat Return<br>Temperature</span>
             </div>
         </div>
         """, unsafe_allow_html=True)
     
     with col_center:
-        # Process Temperature Rectangle
+        st.markdown("""
+        <div style='margin-left: -270px;'>
+            <div style='text-align: center; margin-bottom: 5px;'>
+                <span style='color: #ff9933; font-weight: 600; font-size: 0.85rem;'>Process Exhausts</span><br>
+                <span style='color: #666; font-size: 0.7rem;'>(waste heat)</span><br>
+                <span style='color: #ff9933; font-size: 1.5rem;'>▲</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
         st.markdown(f"""
-        <div style='
-            width: 300px;
-            height: 160px;
-            padding: 0;
-            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-            border: 3px solid #0066cc;
-            border-radius: 12px;
-            box-shadow: 0 6px 16px rgba(0, 102, 204, 0.18);
-            text-align: center;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            margin-left: -5px;
-        '>
-            <div style='color: #0066cc; font-size: 1.2rem; font-weight: 600; margin-bottom: 0.8rem; line-height: 1.2;'>Process Temperature</div>
-            <div style='color: #0066cc; font-size: 3rem; font-weight: bold; line-height: 1;'>{process_temp:.0f}°C</div>
+        <div style='margin-left: -270px;'>
+            <div style='
+                background: linear-gradient(135deg, #ffffff 0%, #e6f2ff 100%);
+                border: 3px solid #0066cc;
+                border-radius: 10px;
+                text-align: center;
+                box-shadow: 0 4px 10px rgba(0, 102, 204, 0.15);
+                width: 180px;
+                height: 180px;
+                padding-top: 50px;
+                margin: 0 auto;
+            '>
+                <div style='color: #0066cc; font-size: 1rem; font-weight: 600;'>Process Temperature</div>
+                <div style='color: #0066cc; font-size: 2.2rem; font-weight: bold; margin-top: 15px;'>{process_temp:.0f}°C</div>
+            </div>
         </div>
         """, unsafe_allow_html=True)
     
     with col_right:
-        st.write("")
+        st.write("")  # Empty column for spacing
     
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -1394,14 +1471,19 @@ elif current_page == "Step 1 of 3":
     st.markdown("---")
     st.markdown("### 📊 Annual Energy Costs (Scale of Site)")
 
-    band_options = ["<£100k", "£100k–£500k", ">£500k"]
-    st.session_state.annual_band = st.radio(
-        "Approximate annual energy spend category",
-        band_options,
-        index=band_options.index(st.session_state.annual_band),
-        horizontal=True
+    st.session_state.yearly_cost = st.number_input(
+        "Annual energy spend (£)",
+        min_value=0.0,
+        max_value=10000000.0,
+        value=st.session_state.yearly_cost,
+        step=10000.0,
+        format="%.0f",
+        help="Enter your total annual energy costs in pounds (£). This is used to estimate your process heat demand."
     )
 
+    # ==================== CALCULATIONS FOR STEP 1 ====================
+    # Calculate process heat demand (Q_process) from annual energy costs
+    
     # Display emission factors
     heat_supply_tech = st.session_state.heat_supply_tech
     uses_fuel = system_uses_fuel(heat_supply_tech)
@@ -1409,14 +1491,9 @@ elif current_page == "Step 1 of 3":
     fuel_type = st.session_state.fuel_type
     emission_factor_fuel_kWh = FUEL_EMISSION_FACTORS_KG_PER_KWH.get(fuel_type, 0.2027)
     emission_factor_elec = ELECTRICITY_CO2_KG_PER_MWH
-    
-    # Emission factors hidden from customer view
-    # if uses_fuel:
-    #     st.info(f"**Emission factors used:** {emission_factor_fuel_kWh:.3f} kgCO₂/kWh for {fuel_type} and {emission_factor_elec:.0f} kgCO₂/MWh for electricity")
-    # else:
-    #     st.info(f"**Emission factors used:** {emission_factor_elec:.0f} kgCO₂/MWh for electricity (comparing to {emission_factor_fuel_kWh:.3f} kgCO₂/kWh natural gas baseline)")
 
-    # Calculate Q_process
+    # Calculate Q_process from annual energy spend
+    # Formula: Q_process = (Annual Cost / Unit Price) × Efficiency × 1000 / Operating Hours
     if uses_fuel:
         unit_cost_baseline = st.session_state.fuel_price
     else:
@@ -1429,11 +1506,13 @@ elif current_page == "Step 1 of 3":
     Q_process_calculated = 100.0
     if unit_cost_baseline > 0 and operating_hours > 0:
         try:
-            energy_purchased_MWh = yearly_cost / unit_cost_baseline
-            useful_MWh = energy_purchased_MWh * boiler_eff
-            Q_process_calculated = max(10.0, useful_MWh * 1000.0 / operating_hours)
+            energy_purchased_MWh = yearly_cost / unit_cost_baseline  # Total energy purchased (MWh)
+            useful_MWh = energy_purchased_MWh * boiler_eff  # Useful energy delivered to process
+            Q_process_calculated = max(10.0, useful_MWh * 1000.0 / operating_hours)  # Average power (kW)
         except (ZeroDivisionError, ValueError):
             Q_process_calculated = 100.0
+    
+    # ==================== END CALCULATIONS FOR STEP 1 ====================
 
     # Initialize manual override flag if not set
     if "q_process_manual_override" not in st.session_state:
@@ -1463,8 +1542,6 @@ elif current_page == "Step 1 of 3":
             value=st.session_state.get("Q_process", Q_process_calculated),
             help="Enter the average thermal power required for your industrial process."
         )
-        # Success message hidden from customer view
-        # st.success("✅ Using your manually entered value")
     else:
         # Use calculated value, show as metric
         Q_process = Q_process_calculated
@@ -1588,7 +1665,7 @@ elif current_page == "Step 2 of 3":
             index=form_options.index(st.session_state.waste_form) if st.session_state.waste_form in form_options else 2
         )
 
-        # Medium-specific guidance - removed per user request
+        # Medium-specific guidance
         waste_form = st.session_state.waste_form
 
         if waste_form == "Humid air":
@@ -1607,12 +1684,16 @@ elif current_page == "Step 2 of 3":
 
         st.markdown("---")
         
+        # ==================== CALCULATIONS FOR STEP 2 ====================
+        # Feasibility Assessment - Evaluate if heat pump is suitable based on waste heat parameters
+        
         # Preliminary Feasibility Assessment
         process_temp = st.session_state.process_temp
         T_out2 = st.session_state.T_out2
         energy_vector = st.session_state.energy_vector
         waste_temp = st.session_state.w_temp if st.session_state.w_temp_known == "Yes" else process_temp
         
+        # Run decision tree to evaluate feasibility
         gate = evaluate_decision_tree(
             process_temp_c=process_temp,
             energy_vector=energy_vector,
@@ -1631,6 +1712,8 @@ elif current_page == "Step 2 of 3":
             q_waste_kw=st.session_state.q_waste_kw if st.session_state.w_amt_known == "Yes" else None
         )
         st.session_state._gate = gate
+        
+        # ==================== END CALCULATIONS FOR STEP 2 ====================
 
         st.markdown("### ✅ Preliminary Feasibility Assessment")
         if gate["status"] == "not_viable":
@@ -1669,50 +1752,11 @@ elif current_page == "Step 2 of 3":
 
     navigation_buttons()
 
-elif current_page == "Investment Variables":
-    st.title("Investment Variables")
-    st.markdown("Set the cost assumptions for your heat pump investment analysis.")
-
-    inv1, inv2 = st.columns(2)
-    
-    st.session_state.design_pm = inv1.number_input(
-        "Design and project management (£)",
-        0.0, 10_000_000.0,
-        value=st.session_state.design_pm,
-        help="Indicative allowance for design and project management."
-    )
-    
-    st.session_state.fixed_install = inv2.number_input(
-        "Fixed installation costs (£)",
-        0.0, 10_000_000.0,
-        value=st.session_state.fixed_install,
-        help="Base installation costs that do not scale with heat-pump size."
-    )
-
-    inv3, inv4, inv5 = st.columns(3)
-    
-    st.session_state.hp_cost_per_kw = inv3.number_input(
-        "Heat pump cost (£/kW)",
-        0.0, 5_000.0,
-        value=st.session_state.hp_cost_per_kw
-    )
-    
-    st.session_state.hr_cost_per_kw = inv4.number_input(
-        "Heat recovery system cost (£/kW)",
-        0.0, 5_000.0,
-        value=st.session_state.hr_cost_per_kw
-    )
-    
-    st.session_state.var_install_per_kw = inv5.number_input(
-        "Variable installation costs (£/kW)",
-        0.0, 5_000.0,
-        value=st.session_state.var_install_per_kw
-    )
-
-    navigation_buttons()
-
 elif current_page == "Step 3 of 3":
     try:
+        # ==================== CALCULATIONS FOR STEP 3 ====================
+        # Main heat pump performance, economic, and environmental calculations
+        
         # Get values
         gate = st.session_state.get("_gate", {"assumptions": {}})
         T_in1 = gate["assumptions"].get("T_in1", st.session_state.w_temp if st.session_state.w_temp_known == "Yes" else st.session_state.process_temp)
@@ -1727,18 +1771,19 @@ elif current_page == "Step 3 of 3":
                 st.rerun()
             st.stop()
         
-        # Calculate performance
+        # --- HEAT PUMP PERFORMANCE CALCULATIONS ---
+        # Calculate COP (Coefficient of Performance) and capacity based on temperatures
         waste_pct_assumed = gate["assumptions"].get("waste_pct", 40)
         waste_min_pct = max(10, min(90, waste_pct_assumed - 10))
         waste_max_pct = max(waste_min_pct + 5, min(100, waste_pct_assumed + 10))
 
         perf = excel_performance_logic(
-            T_in1=T_in1,
-            T_out2=T_out2,
-            P_out2=5.0,
-            Q_process=Q_process,
-            waste_heat_min_pct=waste_min_pct,
-            waste_heat_max_pct=waste_max_pct
+            T_in1=T_in1,  # Waste heat input temperature
+            T_out2=T_out2,  # Required supply temperature
+            P_out2=5.0,  # Output pressure
+            Q_process=Q_process,  # Process heat demand (kW)
+            waste_heat_min_pct=waste_min_pct,  # Minimum waste heat percentage
+            waste_heat_max_pct=waste_max_pct  # Maximum waste heat percentage
         )
 
         if perf["COP_real"] <= 0:
@@ -1748,7 +1793,8 @@ elif current_page == "Step 3 of 3":
                 st.rerun()
             st.stop()
 
-        # Economic calculations
+        # --- ECONOMIC CALCULATIONS ---
+        # Calculate current energy costs vs. heat pump costs
         operating_hours = st.session_state.operating_hours
         electricity_price = st.session_state.electricity_price
         boiler_eff = st.session_state.boiler_eff
@@ -1761,56 +1807,76 @@ elif current_page == "Step 3 of 3":
         else:
             current_energy_price = electricity_price
         
-        Q_steam_MWh = (Q_process * operating_hours) / 1000.0
-        E_hp_electric_MWh = Q_steam_MWh / perf["COP_real"]
-        E_current_MWh = Q_steam_MWh / boiler_eff
+        # Energy consumption calculations
+        Q_steam_MWh = (Q_process * operating_hours) / 1000.0  # Annual heat demand (MWh)
+        E_hp_electric_MWh = Q_steam_MWh / perf["COP_real"]  # Annual electricity for heat pump (MWh)
+        E_current_MWh = Q_steam_MWh / boiler_eff  # Annual energy for current system (MWh)
 
-        cost_current = E_current_MWh * current_energy_price
-        cost_mechapres = E_hp_electric_MWh * electricity_price
-        annual_savings_high = cost_current - cost_mechapres
+        # Cost calculations
+        cost_current = E_current_MWh * current_energy_price  # Current annual energy cost (£)
+        cost_mechapres = E_hp_electric_MWh * electricity_price  # Heat pump annual energy cost (£)
+        annual_savings_high = cost_current - cost_mechapres  # Annual savings (£)
 
-        # CO2 calculations
+        # --- CO2 EMISSIONS CALCULATIONS ---
+        # Calculate carbon footprint: current system vs. heat pump
         emission_factor_elec = st.session_state.emission_factor_elec
         
         if uses_fuel:
             emission_factor_fuel_kWh = st.session_state.emission_factor_fuel_kWh
-            co2_current = E_current_MWh * emission_factor_fuel_kWh
+            co2_current = E_current_MWh * emission_factor_fuel_kWh  # Current CO2 emissions (tonnes)
         else:
             co2_current = E_current_MWh * emission_factor_elec / 1000.0
         
-        co2_mechapres = E_hp_electric_MWh * emission_factor_elec / 1000.0
-        co2_savings = max(0, co2_current - co2_mechapres)
+        co2_mechapres = E_hp_electric_MWh * emission_factor_elec / 1000.0  # Heat pump CO2 emissions (tonnes)
+        co2_savings = max(0, co2_current - co2_mechapres)  # Annual CO2 reduction (tonnes)
 
-        # Investment calculations
+        # --- INVESTMENT CALCULATIONS ---
+        # Calculate capital expenditure (CAPEX) for heat pump system
         design_pm = st.session_state.design_pm
         fixed_install = st.session_state.fixed_install
         hp_cost_per_kw = st.session_state.hp_cost_per_kw
         hr_cost_per_kw = st.session_state.hr_cost_per_kw
         var_install_per_kw = st.session_state.var_install_per_kw
 
-        hp_size_high_kw = max(250.0, perf["capacity_MWth"] * 1000.0)
-        hp_size_low_kw = max(250.0, hp_size_high_kw / 2.0)
-        hr_size_high_kw = 0.66 * hp_size_high_kw
+        # Heat pump and heat recovery sizing
+        hp_size_high_kw = max(250.0, perf["capacity_MWth"] * 1000.0)  # High estimate (kW)
+        hp_size_low_kw = max(250.0, hp_size_high_kw / 2.0)  # Low estimate (kW)
+        hr_size_high_kw = 0.66 * hp_size_high_kw  # Heat recovery size (66% of HP)
         hr_size_low_kw = 0.66 * hp_size_low_kw
 
+        # --- FINANCIAL CALCULATIONS ---
+        # Calculate total investment cost (CAPEX)
         def total_investment(hp_kw, hr_kw):
+            """
+            Calculate total capital expenditure for heat pump system
+            CAPEX = Design/PM + Fixed Install + Variable Costs (HP + HR + Installation)
+            """
             variable_cost = hp_kw * hp_cost_per_kw + hr_kw * hr_cost_per_kw + (hp_kw + hr_kw) * var_install_per_kw
             return design_pm + fixed_install + variable_cost
 
-        capex_low = total_investment(hp_size_low_kw, hr_size_low_kw)
-        capex_high = total_investment(hp_size_high_kw, hr_size_high_kw)
+        capex_low = total_investment(hp_size_low_kw, hr_size_low_kw)  # Low case CAPEX (£)
+        capex_high = total_investment(hp_size_high_kw, hr_size_high_kw)  # High case CAPEX (£)
 
-        savings_high = max(annual_savings_high, 0.0)
-        savings_low = max(0.15 * savings_high, 0.0)
+        savings_high = max(annual_savings_high, 0.0)  # High case annual savings (£)
+        savings_low = max(0.15 * savings_high, 0.0)  # Low case annual savings (15% of high case)
 
+        # Calculate simple payback period
         def simple_payback(capex, savings):
+            """
+            Simple Payback = CAPEX / Annual Savings (years)
+            """
             return capex / savings if savings > 0 else float("inf")
 
+        # Calculate Internal Rate of Return (IRR)
         def irr_from_savings(capex, savings, years=10):
+            """
+            Calculate IRR using binary search method
+            IRR is the discount rate where NPV = 0
+            """
             if savings <= 0:
                 return 0.0
             low_r, high_r = 0.0, 1.0
-            for _ in range(60):
+            for _ in range(60):  # Binary search iterations
                 r = (low_r + high_r) / 2
                 npv = -capex
                 for t in range(1, years + 1):
@@ -1819,8 +1885,9 @@ elif current_page == "Step 3 of 3":
                     low_r = r
                 else:
                     high_r = r
-            return (low_r + high_r) / 2 * 100.0
+            return (low_r + high_r) / 2 * 100.0  # Return as percentage
 
+        # Calculate financial metrics for both scenarios
         payback_low = simple_payback(capex_low, savings_low)
         payback_high = simple_payback(capex_high, savings_high)
         irr_low = irr_from_savings(capex_low, savings_low, years=10)
@@ -1828,6 +1895,10 @@ elif current_page == "Step 3 of 3":
 
         # Calculate NPV (Net Present Value) at 8% discount rate
         def calculate_npv(capex, annual_savings, years=10, discount_rate=0.08):
+            """
+            Calculate Net Present Value
+            NPV = -CAPEX + Σ(Annual Savings / (1 + discount_rate)^year)
+            """
             npv = -capex
             for year in range(1, years + 1):
                 npv += annual_savings / ((1 + discount_rate) ** year)
@@ -1835,6 +1906,8 @@ elif current_page == "Step 3 of 3":
         
         npv_low = calculate_npv(capex_low, savings_low, 10, 0.08)
         npv_high = calculate_npv(capex_high, savings_high, 10, 0.08)
+        
+        # ==================== END CALCULATIONS FOR STEP 3 ====================
 
         # Display results - Table format
         st.subheader("📦 Investment and Returns")
@@ -1857,8 +1930,14 @@ elif current_page == "Step 3 of 3":
         st.dataframe(df_kpi, use_container_width=True)
         st.caption("*Net Present Value calculated at 8% discount rate over 10 years")
 
-        # Calculate cash flow data
+        # Calculate cash flow data for visualization
         def calculate_cash_flow(capex, annual_savings, years=10):
+            """
+            Calculate annual and cumulative cash flows
+            Year 0: -CAPEX (initial investment)
+            Years 1-10: Annual Savings
+            Cumulative: Running total of cash flows
+            """
             cash_flow = [-capex]
             cumulative = [-capex]
             for year in range(1, years + 1):
@@ -1871,6 +1950,9 @@ elif current_page == "Step 3 of 3":
         years_list = list(range(0, 11))
         
         def find_breakeven(cumulative):
+            """
+            Find the year when cumulative cash flow becomes positive (break-even point)
+            """
             for i, val in enumerate(cumulative):
                 if val >= 0:
                     return i
@@ -2029,7 +2111,7 @@ elif current_page == "Step 3 of 3":
                 # Demand & Energy
                 fuel_price=st.session_state.fuel_price,
                 electricity_price=st.session_state.electricity_price,
-                annual_band=st.session_state.annual_band,
+                yearly_cost=st.session_state.yearly_cost,
                 # Waste Heat
                 has_waste=st.session_state.has_waste,
                 how_released=st.session_state.how_released,
